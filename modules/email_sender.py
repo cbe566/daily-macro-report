@@ -22,7 +22,7 @@ SMTP_CONFIG = {
     'port': 587,
     'sender_email': 'cbe566@gmail.com',
     'app_password': 'uetubaoeuhizkhlu',  # Google 應用程式密碼
-    'sender_name': '每日宏觀資訊早報'
+    'sender_name': '何宣逸'
 }
 
 
@@ -239,7 +239,9 @@ def send_report_email(report_date, pdf_path, json_path=None, group=None):
     """
     recipients = load_recipients(group)
     
-    if not recipients['to']:
+    # 所有收件人統一放入 BCC 保護隱私
+    all_bcc = list(recipients.get('to', [])) + list(recipients.get('cc', [])) + list(recipients.get('bcc', []))
+    if not all_bcc:
         print("錯誤：沒有收件人")
         return False
     
@@ -262,12 +264,11 @@ def send_report_email(report_date, pdf_path, json_path=None, group=None):
         print(f"JSON 數據文件不存在：{json_path}，使用預設正文")
         content = _fallback_content(report_date)
     
-    # 構建郵件
+    # 構建郵件（全部使用 BCC，保護收件者隱私）
     msg = MIMEMultipart()
     msg['From'] = f"{SMTP_CONFIG['sender_name']} <{SMTP_CONFIG['sender_email']}>"
-    msg['To'] = ', '.join(recipients['to'])
-    if recipients['cc']:
-        msg['Cc'] = ', '.join(recipients['cc'])
+    msg['To'] = SMTP_CONFIG['sender_email']  # To 只放發件人自己
+    # 不設定 Cc，所有收件人透過 BCC 發送，彼此看不到
     msg['Subject'] = subject
     
     # 郵件正文
@@ -286,21 +287,10 @@ def send_report_email(report_date, pdf_path, json_path=None, group=None):
     else:
         print(f"警告：PDF 文件不存在：{pdf_path}")
     
-    # 收集所有收件人
-    all_recipients = list(recipients['to'])
-    if recipients['cc']:
-        all_recipients.extend(recipients['cc'])
-    if recipients['bcc']:
-        all_recipients.extend(recipients['bcc'])
-    
-    # 通過 SMTP 發送
+    # 通過 SMTP 發送（全部走 BCC）
     print(f"\n正在通過 SMTP 發送郵件...")
-    print(f"  發件人：{SMTP_CONFIG['sender_email']}")
-    print(f"  收件人：{', '.join(recipients['to'])}")
-    if recipients['cc']:
-        print(f"  副本：{', '.join(recipients['cc'])}")
-    if recipients['bcc']:
-        print(f"  密件副本：{', '.join(recipients['bcc'])}")
+    print(f"  發件人：{SMTP_CONFIG['sender_name']} <{SMTP_CONFIG['sender_email']}>")
+    print(f"  BCC 收件人：{len(all_bcc)} 位")
     
     try:
         server = smtplib.SMTP(SMTP_CONFIG['server'], SMTP_CONFIG['port'])
@@ -308,10 +298,10 @@ def send_report_email(report_date, pdf_path, json_path=None, group=None):
         server.starttls()
         server.ehlo()
         server.login(SMTP_CONFIG['sender_email'], SMTP_CONFIG['app_password'])
-        server.sendmail(SMTP_CONFIG['sender_email'], all_recipients, msg.as_string())
+        server.sendmail(SMTP_CONFIG['sender_email'], all_bcc, msg.as_string())
         server.quit()
         
-        print(f"\n✅ 郵件發送成功！已發送給 {len(all_recipients)} 位收件人。")
+        print(f"\n✅ 郵件發送成功！已發送給 {len(all_bcc)} 位收件人（BCC）。")
         return True
     except smtplib.SMTPAuthenticationError as e:
         print(f"\n❌ SMTP 認證失敗：{e}")
