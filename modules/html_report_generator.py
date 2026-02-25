@@ -33,8 +33,8 @@ REPORT_CSS = """
 
 body {
     font-family: 'Noto Sans TC', 'Noto Sans SC', 'Noto Sans JP', 'Helvetica Neue', Arial, sans-serif;
-    font-size: 10pt;
-    line-height: 1.6;
+    font-size: 11pt;
+    line-height: 1.7;
     color: #2c3e50;
     background: #fff;
 }
@@ -73,7 +73,7 @@ body {
     border-left: 4px solid #1a2332;
     padding: 14px 18px;
     margin-bottom: 22px;
-    font-size: 9.5pt;
+    font-size: 11pt;
     line-height: 1.8;
     color: #2c3e50;
 }
@@ -101,7 +101,7 @@ body {
 }
 
 .sub-section-title {
-    font-size: 11pt;
+    font-size: 12pt;
     font-weight: 600;
     color: #2c3e50;
     margin-top: 14px;
@@ -113,7 +113,7 @@ body {
 
 /* ===== 分析段落 ===== */
 .analysis-text {
-    font-size: 9.5pt;
+    font-size: 11pt;
     color: #555;
     line-height: 1.7;
     margin-bottom: 10px;
@@ -125,7 +125,7 @@ table {
     width: 100%;
     border-collapse: collapse;
     margin-bottom: 16px;
-    font-size: 9pt;
+    font-size: 10pt;
 }
 
 table thead th {
@@ -134,7 +134,7 @@ table thead th {
     padding: 8px 10px;
     text-align: left;
     font-weight: 600;
-    font-size: 8.5pt;
+    font-size: 9.5pt;
     letter-spacing: 0.5px;
 }
 
@@ -231,14 +231,14 @@ td.name-cell {
 }
 
 .news-card h3 {
-    font-size: 10.5pt;
+    font-size: 12pt;
     font-weight: 700;
     color: #2c3e50;
     margin-bottom: 6px;
 }
 
 .news-meta {
-    font-size: 8.5pt;
+    font-size: 9.5pt;
     margin-bottom: 6px;
 }
 
@@ -246,7 +246,7 @@ td.name-cell {
     display: inline-block;
     padding: 1px 8px;
     border-radius: 3px;
-    font-size: 8pt;
+    font-size: 9.5pt;
     font-weight: 600;
     margin-right: 6px;
 }
@@ -285,13 +285,13 @@ td.name-cell {
 }
 
 .news-body {
-    font-size: 9pt;
+    font-size: 11pt;
     color: #555;
     line-height: 1.6;
 }
 
 .news-tickers {
-    font-size: 8.5pt;
+    font-size: 9.5pt;
     color: #7f8c8d;
     margin-top: 6px;
 }
@@ -300,13 +300,13 @@ td.name-cell {
     background: #ecf0f1;
     padding: 1px 5px;
     border-radius: 2px;
-    font-size: 8pt;
+    font-size: 9.5pt;
     color: #2c3e50;
 }
 
 /* ===== 熱門股票分析欄 ===== */
 .stock-analysis {
-    font-size: 8pt;
+    font-size: 10pt;
     color: #666;
     line-height: 1.4;
 }
@@ -337,7 +337,7 @@ td.name-cell {
     margin-top: 24px;
     padding-top: 12px;
     border-top: 2px solid #1a2332;
-    font-size: 8pt;
+    font-size: 9pt;
     color: #999;
     line-height: 1.5;
 }
@@ -547,7 +547,7 @@ def _gen_news_section(events):
         html += f'<div class="news-meta">'
         html += f'<span class="badge {badge_cls}">{badge_text}</span>'
         html += f'<span class="badge {dir_cls}">{dir_text}</span>'
-        html += f'<span style="font-size:8pt;color:#999;">影響範圍：{affected}</span>'
+        html += f'<span style="font-size:9.5pt;color:#999;">影響範圍：{affected}</span>'
         html += '</div>\n'
         html += f'<div class="news-body">{event.get("description", "")}</div>\n'
 
@@ -655,7 +655,7 @@ def _gen_stock_table_html(stocks, stock_analysis):
         vol_ratio = s.get('volume_ratio', 1)
         html += '<tr>'
         html += f'<td class="name-cell">{name}</td>'
-        html += f'<td><code style="font-size:8pt;">{s["symbol"]}</code></td>'
+        html += f'<td><code style="font-size:9.5pt;">{s["symbol"]}</code></td>'
         html += f'<td class="right">{s["current"]:,.2f}</td>'
         html += f'<td class="right">{_format_pct(s["change_pct"])}</td>'
         html += f'<td class="center">{vol_ratio:.1f}x</td>'
@@ -679,7 +679,7 @@ def _extract_stocks_html(market_data):
 def _gen_hot_stocks_section(hot_stocks, stock_analysis):
     """生成當日熱門股票章節：分區顯示資金追捧 vs 資金出清"""
     html = '<div class="section-title">四、當日熱門股票</div>\n'
-    html += '<p class="analysis-text" style="color:#999;font-size:8.5pt;font-style:italic;">'
+    html += '<p class="analysis-text" style="color:#999;font-size:10pt;font-style:italic;">'
     html += '篩選邏輯：資金追捧（量比 ≥ 1.5x + 上漲）；資金出清（量比 ≥ 2.5x + 下跌）<br/>'
     html += '排序方式：量比門檻（硬篩）→ 漲跌幅排序 → 新聞提及加分 | 每市場最多 5 支買入 + 5 支賣出</p>\n'
 
@@ -695,11 +695,11 @@ def _gen_hot_stocks_section(hot_stocks, stock_analysis):
         html += f'<div class="sub-section-title">{market}</div>\n'
 
         if inflow:
-            html += '<p style="font-size:9.5pt;font-weight:700;color:#27ae60;margin:8px 0 4px 0;">🔥 資金追捧（買入放量 ≥ 1.5x + 上漲）</p>\n'
+            html += '<p style="font-size:11pt;font-weight:700;color:#27ae60;margin:8px 0 4px 0;">🔥 資金追捧（買入放量 ≥ 1.5x + 上漲）</p>\n'
             html += _gen_stock_table_html(inflow, stock_analysis)
 
         if outflow:
-            html += '<p style="font-size:9.5pt;font-weight:700;color:#e74c3c;margin:8px 0 4px 0;">⚠️ 資金出清（賣出放量 ≥ 2.5x + 下跌）</p>\n'
+            html += '<p style="font-size:11pt;font-weight:700;color:#e74c3c;margin:8px 0 4px 0;">⚠️ 資金出清（賣出放量 ≥ 2.5x + 下跌）</p>\n'
             html += _gen_stock_table_html(outflow, stock_analysis)
 
     html += '<hr class="divider">\n'
@@ -769,7 +769,7 @@ def _gen_calendar_section(calendar_events):
         html += f'<td>{event.get("country", "")}</td>'
         html += f'<td class="name-cell">{event.get("event", "")}</td>'
         html += f'<td class="center" style="{imp_style}">{importance}</td>'
-        html += f'<td style="font-size:8pt;color:#666;">{desc}</td>'
+        html += f'<td style="font-size:10pt;color:#666;">{desc}</td>'
         html += '</tr>\n'
 
     html += '</tbody></table>\n'
@@ -781,9 +781,9 @@ def _gen_calendar_section(calendar_events):
         for event in high_importance:
             html += '<div class="calendar-highlight">\n'
             html += f'<strong>{event.get("event", "")}</strong>（{event.get("country", "")}，{event.get("date", "")}）<br>\n'
-            html += f'<span style="font-size:8.5pt;color:#555;">{event.get("description", "")}</span>\n'
+            html += f'<span style="font-size:10pt;color:#555;">{event.get("description", "")}</span>\n'
             if event.get('consensus'):
-                html += f'<br><span style="font-size:8.5pt;color:#2c3e50;">市場預期：{event["consensus"]}</span>\n'
+                html += f'<br><span style="font-size:10pt;color:#2c3e50;">市場預期：{event["consensus"]}</span>\n'
             html += '</div>\n'
 
     return html
