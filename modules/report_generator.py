@@ -287,19 +287,31 @@ def _render_stock_table(stocks, stock_analysis):
     return md
 
 
+def _extract_stocks_from_market(market_data):
+    """從 v2 格式的 market_data 中提取 inflow 和 outflow 列表"""
+    if isinstance(market_data, dict) and 'inflow' in market_data:
+        # v2 格式: {'inflow': [...], 'outflow': [...]}
+        return market_data.get('inflow', []), market_data.get('outflow', [])
+    elif isinstance(market_data, list):
+        # v1 向後兼容: flat list with 'flow' field
+        inflow = [s for s in market_data if s.get('flow') == 'inflow']
+        outflow = [s for s in market_data if s.get('flow') == 'outflow']
+        return inflow, outflow
+    return [], []
+
+
 def generate_hot_stocks_section(hot_stocks, stock_analysis):
     """生成當日熱門股票章節：分區顯示資金追捧 vs 資金出清"""
     md = "## 四、當日熱門股票\n\n"
     md += "> 篩選邏輯：資金追捧（量比 ≥ 1.5x + 上漲）；資金出清（量比 ≥ 2.5x + 下跌）\n>\n"
-    md += "> 熱度權重：成交量異常 50% > 漲跌幅 35% > 新聞提及 15%\n\n"
+    md += "> 排序方式：量比門檻（硬篩）→ 漲跌幅排序 → 新聞提及加分\n>\n"
+    md += "> 每市場最多顯示 5 支買入 + 5 支賣出\n\n"
 
     for market in ['美股', '港股', '日股', '台股']:
         if market not in hot_stocks or not hot_stocks[market]:
             continue
 
-        stocks = hot_stocks[market]
-        inflow = [s for s in stocks if s.get('flow') == 'inflow']
-        outflow = [s for s in stocks if s.get('flow') == 'outflow']
+        inflow, outflow = _extract_stocks_from_market(hot_stocks[market])
 
         if not inflow and not outflow:
             continue
@@ -313,6 +325,9 @@ def generate_hot_stocks_section(hot_stocks, stock_analysis):
         if outflow:
             md += f"⚠️ **資金出清**（賣出放量 ≥ 2.5x + 下跌）\n\n"
             md += _render_stock_table(outflow, stock_analysis)
+
+        if not inflow and not outflow:
+            md += "_（今日無符合條件的股票）_\n\n"
 
     md += "---\n\n"
     return md
@@ -438,13 +453,23 @@ def generate_asia_report(market_data, news_events, hot_stocks, stock_analysis, i
 
     for market in ['日股', '台股', '港股']:
         if market in hot_stocks and hot_stocks[market]:
-            md += f"### {market}熱門股票\n\n"
-            md += "| 股票 | 代碼 | 收盤價 | 漲跌幅 | 量比 |\n"
-            md += "|:-----|:-----|-------:|-------:|-----:|\n"
-            for s in hot_stocks[market]:
-                trend = get_trend_icon(s['change_pct'])
-                md += f"| {trend} **{s['name'][:28]}** | `{s['symbol']}` | {s['current']:,.2f} | {s['change_pct']:+.2f}% | {s.get('volume_ratio', 1):.1f}x |\n"
-            md += "\n"
+            inflow, outflow = _extract_stocks_from_market(hot_stocks[market])
+            if inflow:
+                md += f"### {market} — 資金追捧\n\n"
+                md += "| 股票 | 代碼 | 收盤價 | 漲跌幅 | 量比 |\n"
+                md += "|:-----|:-----|-------:|-------:|-----:|\n"
+                for s in inflow:
+                    trend = get_trend_icon(s['change_pct'])
+                    md += f"| {trend} **{s['name'][:28]}** | `{s['symbol']}` | {s['current']:,.2f} | {s['change_pct']:+.2f}% | {s.get('volume_ratio', 1):.1f}x |\n"
+                md += "\n"
+            if outflow:
+                md += f"### {market} — 資金出清\n\n"
+                md += "| 股票 | 代碼 | 收盤價 | 漲跌幅 | 量比 |\n"
+                md += "|:-----|:-----|-------:|-------:|-----:|\n"
+                for s in outflow:
+                    trend = get_trend_icon(s['change_pct'])
+                    md += f"| {trend} **{s['name'][:28]}** | `{s['symbol']}` | {s['current']:,.2f} | {s['change_pct']:+.2f}% | {s.get('volume_ratio', 1):.1f}x |\n"
+                md += "\n"
 
     md += "---\n\n**資料來源**：Yahoo Finance、Polygon.io、S&P Global、CNBC、Investing.com\n"
     return md
@@ -499,13 +524,23 @@ def generate_us_report(market_data, news_events, hot_stocks, stock_analysis, ind
         md += _generate_index_table(us)
 
     if '美股' in hot_stocks and hot_stocks['美股']:
-        md += "### 美股熱門股票\n\n"
-        md += "| 股票 | 代碼 | 收盤價 | 漲跌幅 | 量比 |\n"
-        md += "|:-----|:-----|-------:|-------:|-----:|\n"
-        for s in hot_stocks['美股']:
-            trend = get_trend_icon(s['change_pct'])
-            md += f"| {trend} **{s['name'][:28]}** | `{s['symbol']}` | {s['current']:,.2f} | {s['change_pct']:+.2f}% | {s.get('volume_ratio', 1):.1f}x |\n"
-        md += "\n"
+        inflow, outflow = _extract_stocks_from_market(hot_stocks['美股'])
+        if inflow:
+            md += "### 美股 — 資金追捧\n\n"
+            md += "| 股票 | 代碼 | 收盤價 | 漲跌幅 | 量比 |\n"
+            md += "|:-----|:-----|-------:|-------:|-----:|\n"
+            for s in inflow:
+                trend = get_trend_icon(s['change_pct'])
+                md += f"| {trend} **{s['name'][:28]}** | `{s['symbol']}` | {s['current']:,.2f} | {s['change_pct']:+.2f}% | {s.get('volume_ratio', 1):.1f}x |\n"
+            md += "\n"
+        if outflow:
+            md += "### 美股 — 資金出清\n\n"
+            md += "| 股票 | 代碼 | 收盤價 | 漲跌幅 | 量比 |\n"
+            md += "|:-----|:-----|-------:|-------:|-----:|\n"
+            for s in outflow:
+                trend = get_trend_icon(s['change_pct'])
+                md += f"| {trend} **{s['name'][:28]}** | `{s['symbol']}` | {s['current']:,.2f} | {s['change_pct']:+.2f}% | {s.get('volume_ratio', 1):.1f}x |\n"
+            md += "\n"
 
     md += "---\n\n**資料來源**：Yahoo Finance、Polygon.io、S&P Global、CNBC、Investing.com\n"
     return md

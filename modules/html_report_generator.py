@@ -665,20 +665,29 @@ def _gen_stock_table_html(stocks, stock_analysis):
     return html
 
 
+def _extract_stocks_html(market_data):
+    """從 v2 格式的 market_data 中提取 inflow 和 outflow 列表"""
+    if isinstance(market_data, dict) and 'inflow' in market_data:
+        return market_data.get('inflow', []), market_data.get('outflow', [])
+    elif isinstance(market_data, list):
+        inflow = [s for s in market_data if s.get('flow') == 'inflow']
+        outflow = [s for s in market_data if s.get('flow') == 'outflow']
+        return inflow, outflow
+    return [], []
+
+
 def _gen_hot_stocks_section(hot_stocks, stock_analysis):
     """生成當日熱門股票章節：分區顯示資金追捧 vs 資金出清"""
     html = '<div class="section-title">四、當日熱門股票</div>\n'
     html += '<p class="analysis-text" style="color:#999;font-size:8.5pt;font-style:italic;">'
     html += '篩選邏輯：資金追捧（量比 ≥ 1.5x + 上漲）；資金出清（量比 ≥ 2.5x + 下跌）<br/>'
-    html += '熱度權重：成交量異常 50% > 漲跌幅 35% > 新聞提及 15%</p>\n'
+    html += '排序方式：量比門檻（硬篩）→ 漲跌幅排序 → 新聞提及加分 | 每市場最多 5 支買入 + 5 支賣出</p>\n'
 
     for market in ['美股', '港股', '日股', '台股']:
         if market not in hot_stocks or not hot_stocks[market]:
             continue
 
-        stocks = hot_stocks[market]
-        inflow = [s for s in stocks if s.get('flow') == 'inflow']
-        outflow = [s for s in stocks if s.get('flow') == 'outflow']
+        inflow, outflow = _extract_stocks_html(hot_stocks[market])
 
         if not inflow and not outflow:
             continue

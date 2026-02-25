@@ -21,7 +21,7 @@ from modules.market_data import (
     get_commodities, get_forex, get_bonds, get_crypto
 )
 from modules.news_collector import get_news_for_date
-from modules.hot_stocks import get_all_hot_stocks, detect_hot_stocks, US_STOCK_POOL, JP_STOCK_POOL, TW_STOCK_POOL, HK_STOCK_POOL
+from modules.hot_stocks import get_all_hot_stocks
 from modules.ai_analyzer import (
     analyze_macro_news, analyze_index_movements,
     analyze_hot_stocks, generate_economic_calendar_analysis
@@ -88,25 +88,39 @@ def collect_news():
     return news_data
 
 
-def collect_hot_stocks(report_type, news_trending):
-    """收集熱門股票"""
-    log("開始偵測熱門股票...")
-    hot_stocks = {}
+def collect_hot_stocks(news_trending=None):
+    """
+    收集熱門股票（v2 — 全掃描版）
 
-    if report_type in ('asia', 'daily', 'all'):
-        log("  偵測日股熱門...")
-        hot_stocks['日股'] = detect_hot_stocks(JP_STOCK_POOL, '日股', top_n=5)
-        log("  偵測台股熱門...")
-        hot_stocks['台股'] = detect_hot_stocks(TW_STOCK_POOL, '台股', top_n=5)
-        log("  偵測港股熱門...")
-        hot_stocks['港股'] = detect_hot_stocks(HK_STOCK_POOL, '港股', top_n=5)
-
-    if report_type in ('us', 'daily', 'all'):
-        log("  偵測美股熱門...")
-        hot_stocks['美股'] = detect_hot_stocks(US_STOCK_POOL, '美股', top_n=8)
-
+    Returns:
+        dict: {
+            '美股': {'inflow': [...], 'outflow': [...]},
+            '日股': {'inflow': [...], 'outflow': [...]},
+            '台股': {'inflow': [...], 'outflow': [...]},
+            '港股': {'inflow': [...], 'outflow': [...]},
+        }
+    """
+    log("開始偵測熱門股票（指數成分股全掃描）...")
+    hot_stocks = get_all_hot_stocks(news_trending_tickers=news_trending)
     log(f"  ✓ 熱門股票偵測完成")
     return hot_stocks
+
+
+def flatten_hot_stocks(hot_stocks):
+    """
+    將 v2 格式的 hot_stocks 展平為 flat list 格式，供 AI 分析使用
+
+    v2 格式: {'美股': {'inflow': [...], 'outflow': [...]}, ...}
+    flat 格式: {'美股': [stock1, stock2, ...], ...}
+    """
+    flat = {}
+    for market, data in hot_stocks.items():
+        if isinstance(data, dict) and 'inflow' in data:
+            flat[market] = data['inflow'] + data['outflow']
+        else:
+            # 向後兼容：已經是 flat 格式
+            flat[market] = data
+    return flat
 
 
 def run_ai_analysis(market_data, news_data, hot_stocks):
@@ -130,24 +144,22 @@ def run_ai_analysis(market_data, news_data, hot_stocks):
     index_analysis = analyze_index_movements(indices_for_analysis, news_events)
     log("  ✓ 指數分析完成")
 
-    # 3. 分析熱門股票
+    # 3. 分析熱門股票（使用 flat 格式）
     log("  AI 分析熱門股票...")
-    stock_analysis = analyze_hot_stocks(hot_stocks, news_data['articles'])
+    flat_stocks = flatten_hot_stocks(hot_stocks)
+    stock_analysis = analyze_hot_stocks(flat_stocks, news_data['articles'])
     log("  ✓ 熱門股票分析完成")
 
     # 4. 分析經濟日曆
     log("  AI 分析經濟日曆...")
     econ_news = get_upcoming_events_from_news(news_data['articles'])
-    # 動態產生經濟日曆提示：讓 AI 從新聞中提取本週重要經濟事件
     from datetime import datetime as _dt
     today = _dt.now()
     current_year = today.year
-    # 計算本週日期範圍
-    weekday = today.weekday()  # 0=Monday
+    weekday = today.weekday()
     week_start = today - timedelta(days=weekday)
     week_dates = [(week_start + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(7)]
-    
-    # 從新聞中提取經濟日曆相關內容
+
     econ_related_news = []
     econ_keywords = ['CPI', 'GDP', 'PPI', 'NFP', 'nonfarm', 'payroll', 'retail sales', 'unemployment',
                      'inflation', 'interest rate', 'Fed', 'ECB', 'BOJ', 'FOMC', 'PMI', 'manufacturing',
@@ -161,7 +173,7 @@ def run_ai_analysis(market_data, news_data, hot_stocks):
                 'title': article.get('title', ''),
                 'description': article.get('description', '')[:300],
             })
-    
+
     calendar_text = f"""
 今天日期：{today.strftime('%Y-%m-%d')}
 本週日期範圍：{week_dates[0]} ~ {week_dates[6]}
@@ -188,6 +200,43 @@ def save_report(content, filename):
     return filepath
 
 
+def serialize_hot_stocks(hot_stocks):
+    """
+    將 hot_stocks 序列化為 JSON 可存儲的格式
+
+    v2 格式: {'美股': {'inflow': [...], 'outflow': [...]}, ...}
+    """
+    serialized = {}
+    for market, data in hot_stocks.items():
+        if isinstance(data, dict) and 'inflow' in data:
+            serialized[market] = {
+                'inflow': [
+                    {
+                        'symbol': s['symbol'], 'name': s['name'], 'current': s['current'],
+                        'change_pct': s['change_pct'], 'volume_ratio': s.get('volume_ratio', 1),
+                        'volume': s.get('volume', 0), 'avg_volume': s.get('avg_volume', 0),
+                        'flow': s.get('flow', 'inflow'),
+                        'news_mentions': s.get('news_mentions', 0),
+                    }
+                    for s in data['inflow']
+                ],
+                'outflow': [
+                    {
+                        'symbol': s['symbol'], 'name': s['name'], 'current': s['current'],
+                        'change_pct': s['change_pct'], 'volume_ratio': s.get('volume_ratio', 1),
+                        'volume': s.get('volume', 0), 'avg_volume': s.get('avg_volume', 0),
+                        'flow': s.get('flow', 'outflow'),
+                        'news_mentions': s.get('news_mentions', 0),
+                    }
+                    for s in data['outflow']
+                ],
+            }
+        else:
+            # 向後兼容
+            serialized[market] = data
+    return serialized
+
+
 def main():
     report_type = sys.argv[1] if len(sys.argv) > 1 else 'daily'
     report_date = datetime.now().strftime('%Y-%m-%d')
@@ -204,8 +253,8 @@ def main():
     # 2. 收集新聞
     news_data = collect_news()
 
-    # 3. 收集熱門股票
-    hot_stocks = collect_hot_stocks(report_type, news_data.get('trending_tickers', []))
+    # 3. 收集熱門股票（v2 全掃描）
+    hot_stocks = collect_hot_stocks(news_data.get('trending_tickers', []))
 
     # 4. AI 分析
     news_events, index_analysis, stock_analysis, calendar_events = run_ai_analysis(
@@ -249,13 +298,7 @@ def main():
         'index_analysis': index_analysis,
         'stock_analysis': stock_analysis,
         'calendar_events': calendar_events,
-        'hot_stocks': {
-            market: [{'symbol': s['symbol'], 'name': s['name'], 'current': s['current'],
-                      'change_pct': s['change_pct'], 'volume_ratio': s.get('volume_ratio', 1),
-                      'heat_score': s['heat_score'], 'flow': s.get('flow', '')}
-                     for s in stocks]
-            for market, stocks in hot_stocks.items()
-        },
+        'hot_stocks': serialize_hot_stocks(hot_stocks),
         'report_date': report_date,
         'generated_at': datetime.now().isoformat(),
     }

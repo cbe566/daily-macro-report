@@ -1,17 +1,143 @@
 #!/usr/bin/env python3
 """
-新聞收集模組
-使用 Polygon.io API 獲取金融新聞，嚴格過濾日期，只保留目標日期的新聞
-增加搜索工具抓取當日真正的重點財經新聞
+新聞收集模組 v3
+雙來源架構：
+  1. NewsAPI.org（主要）— 高品質主流財經媒體新聞（WSJ, CNBC, Bloomberg, Reuters 等）
+  2. Polygon.io（補充）— 提供 ticker 關聯度和市場情緒數據
+
+品質控制：
+  - 過濾律師事務所集體訴訟廣告
+  - 過濾市場研究報告廣告
+  - 嚴格日期過濾，只保留目標日期的新聞
+  - 去重合併
 """
 import os
+import re
 import json
 import requests
 from datetime import datetime, timedelta
 from collections import Counter
 
 POLYGON_API_KEY = os.environ.get('POLYGON_API_KEY', '')
+NEWSAPI_KEY = os.environ.get('NEWSAPI_KEY', '919b1fdb80a340f2b3080464664d7178')
 
+# ─── 垃圾新聞過濾規則 ─────────────────────────────────────────────
+# 標題/描述中包含這些關鍵詞的新聞將被過濾掉
+JUNK_TITLE_PATTERNS = [
+    r'class action',
+    r'securities fraud',
+    r'shareholder alert',
+    r'investor alert',
+    r'reminds investors',
+    r'encourages.*investors.*to\s+(inquire|contact)',
+    r'announces.*class action',
+    r'announces.*lawsuit',
+    r'investigating.*securities',
+    r'lead plaintiff deadline',
+    r'securities litigation',
+    r'loss recovery',
+    r'investors with.*losses',
+]
+
+# 已知的律師事務所 / 垃圾來源 publisher 名稱
+JUNK_PUBLISHERS = {
+    'halper sadeh', 'bragar eagel', 'rosen law', 'robbins llp',
+    'bernstein liebhard', 'pomerantz', 'levi & korsinsky',
+    'kessler topaz', 'schall law', 'faruqi & faruqi',
+    'bronstein, gewirtz', 'rigrodsky & long', 'johnson fistel',
+    'kirby mcinerney', 'glancy prongay', 'block & leviton',
+    'scott+scott', 'labaton sucharow',
+}
+
+# 編譯正則表達式（提升效能）
+_JUNK_RE = re.compile('|'.join(JUNK_TITLE_PATTERNS), re.IGNORECASE)
+
+
+def _is_junk_article(article):
+    """判斷是否為垃圾新聞（律師事務所廣告、訴訟招攬等）"""
+    title = article.get('title', '')
+    desc = article.get('description', '') or ''
+    publisher = article.get('publisher', '').lower()
+
+    # 檢查 publisher 是否為已知垃圾來源
+    for junk_pub in JUNK_PUBLISHERS:
+        if junk_pub in publisher:
+            return True
+
+    # 檢查標題和描述是否匹配垃圾模式
+    combined = f"{title} {desc}"
+    if _JUNK_RE.search(combined):
+        return True
+
+    return False
+
+
+# ─── NewsAPI.org 新聞來源 ──────────────────────────────────────────
+
+def get_newsapi_headlines(category='business', country='us', page_size=50):
+    """從 NewsAPI 獲取頭條新聞"""
+    try:
+        resp = requests.get('https://newsapi.org/v2/top-headlines', params={
+            'category': category,
+            'country': country,
+            'pageSize': page_size,
+            'apiKey': NEWSAPI_KEY,
+        }, timeout=15)
+        data = resp.json()
+        if data.get('status') != 'ok':
+            print(f"  NewsAPI headlines error: {data.get('message', 'unknown')}")
+            return []
+        return _process_newsapi_articles(data.get('articles', []))
+    except Exception as e:
+        print(f"  NewsAPI headlines error: {e}")
+        return []
+
+
+def get_newsapi_everything(query, from_date, to_date, sort_by='relevancy', page_size=30):
+    """從 NewsAPI 搜尋特定主題的新聞"""
+    try:
+        resp = requests.get('https://newsapi.org/v2/everything', params={
+            'q': query,
+            'language': 'en',
+            'sortBy': sort_by,
+            'from': from_date,
+            'to': to_date,
+            'pageSize': page_size,
+            'apiKey': NEWSAPI_KEY,
+        }, timeout=15)
+        data = resp.json()
+        if data.get('status') != 'ok':
+            print(f"  NewsAPI everything error: {data.get('message', 'unknown')}")
+            return []
+        return _process_newsapi_articles(data.get('articles', []))
+    except Exception as e:
+        print(f"  NewsAPI everything error: {e}")
+        return []
+
+
+def _process_newsapi_articles(raw_articles):
+    """處理 NewsAPI 返回的文章，轉換為統一格式"""
+    processed = []
+    for article in raw_articles:
+        # 跳過被移除的文章
+        if article.get('title') == '[Removed]':
+            continue
+
+        processed.append({
+            'title': article.get('title', ''),
+            'description': article.get('description', '') or '',
+            'publisher': article.get('source', {}).get('name', ''),
+            'published_utc': article.get('publishedAt', ''),
+            'tickers': [],  # NewsAPI 不提供 tickers，後續由 Polygon 補充
+            'keywords': [],
+            'insights': [],
+            'url': article.get('url', ''),
+            'source': 'newsapi',
+        })
+    return processed
+
+
+# ─── Polygon.io 新聞來源（補充） ──────────────────────────────────
 
 def get_polygon_news(limit=100, ticker=None, published_after=None, published_before=None):
     """從 Polygon.io 獲取金融新聞，支持日期範圍過濾"""
@@ -46,12 +172,15 @@ def get_polygon_news(limit=100, ticker=None, published_after=None, published_bef
                 'keywords': article.get('keywords', []),
                 'insights': article.get('insights', []),
                 'url': article.get('article_url', ''),
+                'source': 'polygon',
             })
         return processed
     except Exception as e:
-        print(f"Polygon news error: {e}")
+        print(f"  Polygon news error: {e}")
         return []
 
+
+# ─── 日期過濾 ─────────────────────────────────────────────────────
 
 def filter_articles_by_date(articles, target_date_str):
     """嚴格過濾：只保留目標日期當天的新聞"""
@@ -59,12 +188,13 @@ def filter_articles_by_date(articles, target_date_str):
     for article in articles:
         pub_utc = article.get('published_utc', '')
         if pub_utc:
-            # published_utc 格式: 2026-02-09T14:30:00Z
             article_date = pub_utc[:10]  # 取 YYYY-MM-DD
             if article_date == target_date_str:
                 filtered.append(article)
     return filtered
 
+
+# ─── Ticker 關聯度提取 ────────────────────────────────────────────
 
 def get_trending_tickers_from_news(articles):
     """從新聞中提取熱門股票（出現頻率最高的 tickers）"""
@@ -86,7 +216,6 @@ def get_trending_tickers_from_news(articles):
                 if reasoning:
                     ticker_sentiment[t]['reasons'].append(reasoning)
 
-    # 取出現次數最多的前20個 tickers
     top_tickers = ticker_counter.most_common(20)
 
     results = []
@@ -101,20 +230,21 @@ def get_trending_tickers_from_news(articles):
     return results
 
 
+# ─── 新聞分類 ─────────────────────────────────────────────────────
+
 def categorize_news(articles):
     """將新聞分類為宏觀事件類別"""
     categories = {
-        'central_bank': [],      # 央行政策
-        'economic_data': [],     # 經濟數據
-        'geopolitics': [],       # 地緣政治
-        'tech_industry': [],     # 科技產業
-        'commodities': [],       # 大宗商品
-        'crypto': [],            # 加密貨幣
-        'earnings': [],          # 財報
-        'other': [],             # 其他
+        'central_bank': [],
+        'economic_data': [],
+        'geopolitics': [],
+        'tech_industry': [],
+        'commodities': [],
+        'crypto': [],
+        'earnings': [],
+        'other': [],
     }
 
-    # 關鍵詞分類規則
     rules = {
         'central_bank': ['fed', 'federal reserve', 'ecb', 'boj', 'pboc', 'rate cut', 'rate hike',
                          'interest rate', 'monetary policy', 'inflation target', 'quantitative',
@@ -150,82 +280,130 @@ def categorize_news(articles):
     return categories
 
 
+# ─── 主入口：雙來源新聞收集 ───────────────────────────────────────
+
 def get_news_for_date(target_date=None):
     """
-    獲取指定日期的新聞
-    嚴格只返回 target_date 當天的新聞
-    如果當天是週末/假日新聞較少，會擴展到前一個交易日
+    獲取指定日期的新聞（雙來源架構）
+
+    1. NewsAPI（主要）：高品質主流財經媒體新聞
+       - Top Headlines（商業類）
+       - Everything（多主題搜尋：宏觀、科技、大宗商品、地緣政治）
+    2. Polygon（補充）：提供 ticker 關聯度
+    3. 品質過濾：移除律師事務所廣告等垃圾新聞
+    4. 去重合併
     """
     if target_date is None:
         target_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 
-    # 設定嚴格的日期範圍：目標日期 00:00:00 到 23:59:59 UTC
+    print(f"  新聞目標日期: {target_date}")
+    all_articles = []
+
+    # ── 來源 1：NewsAPI Top Headlines ──
+    print(f"  [NewsAPI] 抓取 Top Headlines...")
+    headlines = get_newsapi_headlines(category='business', page_size=50)
+    headlines = filter_articles_by_date(headlines, target_date)
+    print(f"    Top Headlines (當日): {len(headlines)} 篇")
+    all_articles.extend(headlines)
+
+    # ── 來源 2：NewsAPI Everything（多主題搜尋） ──
+    search_queries = [
+        ('stock market OR Wall Street OR S&P 500 OR Dow Jones OR NASDAQ', '股市'),
+        ('Fed OR interest rate OR central bank OR monetary policy', '央行'),
+        ('NVIDIA OR semiconductor OR AI chip OR data center', 'AI/科技'),
+        ('oil price OR gold price OR commodity OR OPEC', '大宗商品'),
+        ('tariff OR trade war OR geopolitics OR sanctions', '地緣政治'),
+        ('earnings OR quarterly results OR revenue guidance', '財報'),
+        ('bitcoin OR crypto OR ethereum', '加密貨幣'),
+        ('merger OR acquisition OR IPO OR buyout', '併購/IPO'),
+    ]
+
+    for query, label in search_queries:
+        print(f"  [NewsAPI] 搜尋 {label}...")
+        articles = get_newsapi_everything(
+            query=query,
+            from_date=target_date,
+            to_date=target_date,
+            sort_by='relevancy',
+            page_size=15
+        )
+        articles = filter_articles_by_date(articles, target_date)
+        print(f"    {label}: {len(articles)} 篇")
+        all_articles.extend(articles)
+
+    # ── 來源 3：Polygon（補充 ticker 關聯） ──
     published_after = f"{target_date}T00:00:00Z"
     published_before = f"{target_date}T23:59:59Z"
-
-    print(f"  抓取新聞日期範圍: {published_after} ~ {published_before}")
-
-    # 第一次抓取：嚴格目標日期
-    articles = get_polygon_news(
+    print(f"  [Polygon] 抓取新聞（ticker 關聯）...")
+    polygon_articles = get_polygon_news(
         limit=100,
         published_after=published_after,
         published_before=published_before
     )
+    polygon_articles = filter_articles_by_date(polygon_articles, target_date)
+    print(f"    Polygon 新聞: {len(polygon_articles)} 篇")
+    all_articles.extend(polygon_articles)
 
-    # 嚴格過濾確保日期正確
-    articles = filter_articles_by_date(articles, target_date)
-    print(f"  目標日期 {target_date} 新聞數: {len(articles)}")
+    # ── 品質過濾：移除垃圾新聞 ──
+    before_filter = len(all_articles)
+    all_articles = [a for a in all_articles if not _is_junk_article(a)]
+    junk_removed = before_filter - len(all_articles)
+    print(f"  垃圾新聞過濾: 移除 {junk_removed} 篇（律師事務所廣告等）")
 
-    # 如果是週末或假日，新聞可能很少，擴展到前一天
-    if len(articles) < 10:
-        prev_date = (datetime.strptime(target_date, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
-        prev_after = f"{prev_date}T00:00:00Z"
-        prev_before = f"{prev_date}T23:59:59Z"
-        extra_articles = get_polygon_news(
-            limit=50,
-            published_after=prev_after,
-            published_before=prev_before
-        )
-        extra_articles = filter_articles_by_date(extra_articles, prev_date)
-        print(f"  補充前一日 {prev_date} 新聞數: {len(extra_articles)}")
-        articles.extend(extra_articles)
-
-    # 去重（根據標題）
+    # ── 去重（根據標題相似度） ──
     seen_titles = set()
     unique_articles = []
-    for article in articles:
-        title = article.get('title', '')
-        if title and title not in seen_titles:
-            seen_titles.add(title)
+    for article in all_articles:
+        title = article.get('title', '').strip()
+        if not title:
+            continue
+        # 簡單去重：完全相同標題
+        title_key = title.lower()[:80]
+        if title_key not in seen_titles:
+            seen_titles.add(title_key)
             unique_articles.append(article)
 
-    articles = unique_articles
-    print(f"  去重後總新聞數: {len(articles)}")
+    all_articles = unique_articles
+    print(f"  去重後總新聞數: {len(all_articles)}")
+
+    # ── 按來源品質排序（NewsAPI 優先） ──
+    def _article_priority(a):
+        # NewsAPI 來源排前面
+        source_score = 0 if a.get('source') == 'newsapi' else 1
+        # 有 ticker 關聯的排前面
+        ticker_score = 0 if a.get('tickers') else 1
+        return (source_score, ticker_score)
+
+    all_articles.sort(key=_article_priority)
 
     return {
-        'articles': articles,
-        'categorized': categorize_news(articles),
-        'trending_tickers': get_trending_tickers_from_news(articles),
+        'articles': all_articles,
+        'categorized': categorize_news(all_articles),
+        'trending_tickers': get_trending_tickers_from_news(all_articles),
         'date': target_date,
     }
 
 
 if __name__ == '__main__':
-    data = get_news_for_date()
+    data = get_news_for_date('2026-02-24')
     with open('/home/ubuntu/daily-macro-report/reports/news_test.json', 'w') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     print(f"\n新聞收集完成 - {data['date']}")
     print(f"總新聞數: {len(data['articles'])}")
 
-    # 顯示每篇新聞的日期，驗證過濾
-    print(f"\n新聞日期驗證:")
-    for a in data['articles'][:5]:
-        print(f"  [{a['published_utc'][:10]}] {a['title'][:80]}")
+    print(f"\n前 10 篇新聞:")
+    for a in data['articles'][:10]:
+        src = a.get('source', 'unknown')
+        pub = a.get('publisher', '')
+        title = a.get('title', '')[:80]
+        print(f"  [{src}|{pub}] {title}")
 
+    print(f"\n新聞分類:")
     for cat, articles in data['categorized'].items():
         if articles:
             print(f"  {cat}: {len(articles)} articles")
+
     print(f"\n熱門股票:")
     for t in data['trending_tickers'][:10]:
         print(f"  {t['ticker']}: {t['mention_count']} mentions")

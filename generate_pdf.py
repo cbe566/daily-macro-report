@@ -16,6 +16,40 @@ from modules.html_report_generator import generate_html_report
 from weasyprint import HTML
 
 
+def _ensure_flow_compat(hot_stocks):
+    """
+    確保 hot_stocks 數據格式相容 v2（{inflow: [], outflow: []}）
+
+    v2 格式: {'美股': {'inflow': [...], 'outflow': [...]}, ...}
+    v1 格式: {'美股': [stock1, stock2, ...], ...}
+
+    如果是 v1 格式，自動轉換為 v2 格式
+    """
+    MIN_VOL_BUY = 1.5
+    MIN_VOL_SELL = 2.5
+
+    for market, data in hot_stocks.items():
+        if isinstance(data, dict) and 'inflow' in data:
+            # 已經是 v2 格式，不需要轉換
+            continue
+        elif isinstance(data, list):
+            # v1 格式：flat list，需要轉換
+            inflow = []
+            outflow = []
+            for s in data:
+                chg = s.get('change_pct', 0)
+                vr = s.get('volume_ratio', 1)
+                if chg > 0 and vr >= MIN_VOL_BUY:
+                    s['flow'] = 'inflow'
+                    inflow.append(s)
+                elif chg < 0 and vr >= MIN_VOL_SELL:
+                    s['flow'] = 'outflow'
+                    outflow.append(s)
+            hot_stocks[market] = {'inflow': inflow, 'outflow': outflow}
+
+    return hot_stocks
+
+
 def main():
     report_date = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime('%Y-%m-%d')
     json_path = f"reports/raw_data_{report_date}.json"
@@ -34,25 +68,18 @@ def main():
     index_analysis = raw.get('index_analysis', {})
     calendar_events = raw.get('calendar_events', [])
 
-    # 自動補全 flow 欄位（相容舊版 raw_data）
-    MIN_VOL_BUY = 1.5
-    MIN_VOL_SELL = 2.5
-    for market, stocks in hot_stocks.items():
-        for s in stocks:
-            if not s.get('flow'):
-                chg = s.get('change_pct', 0)
-                vr = s.get('volume_ratio', 1)
-                if chg > 0 and vr >= MIN_VOL_BUY:
-                    s['flow'] = 'inflow'
-                elif chg < 0 and vr >= MIN_VOL_SELL:
-                    s['flow'] = 'outflow'
-                else:
-                    s['flow'] = 'inflow' if chg > 0 else 'outflow'  # fallback
+    # 確保格式相容
+    hot_stocks = _ensure_flow_compat(hot_stocks)
 
     print(f"Report date: {report_date}")
     print(f"Hot stocks markets: {list(hot_stocks.keys())}")
-    for m, s in hot_stocks.items():
-        print(f"  {m}: {len(s)} stocks")
+    for m, data in hot_stocks.items():
+        if isinstance(data, dict):
+            in_count = len(data.get('inflow', []))
+            out_count = len(data.get('outflow', []))
+            print(f"  {m}: 買入放量 {in_count} 支, 賣出放量 {out_count} 支")
+        else:
+            print(f"  {m}: {len(data)} stocks (legacy format)")
 
     print("Generating HTML report...")
     html_content = generate_html_report(
