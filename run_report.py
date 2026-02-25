@@ -249,8 +249,10 @@ def main():
         'index_analysis': index_analysis,
         'stock_analysis': stock_analysis,
         'calendar_events': calendar_events,
-        'hot_stocks_summary': {
-            market: [{'symbol': s['symbol'], 'change_pct': s['change_pct'], 'heat_score': s['heat_score']}
+        'hot_stocks': {
+            market: [{'symbol': s['symbol'], 'name': s['name'], 'current': s['current'],
+                      'change_pct': s['change_pct'], 'volume_ratio': s.get('volume_ratio', 1),
+                      'heat_score': s['heat_score']}
                      for s in stocks]
             for market, stocks in hot_stocks.items()
         },
