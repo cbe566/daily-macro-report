@@ -3,7 +3,9 @@
     "default": {
       "description": "預設收件群組",
       "to": [
-        "jamieho@htsc.com"
+        "jamieho@htsc.com",
+        "Kone13852476@gmail.com",
+        "cbe566@gmail.com"
       ],
       "cc": [],
       "bcc": []
