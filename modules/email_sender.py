@@ -124,10 +124,42 @@ def generate_email_summary(json_path):
     news = data.get('news_events', [])
     index_analysis = data.get('index_analysis', {})
     calendar = data.get('calendar_events', [])
+    holiday = data.get('holiday_alerts', {})
     
     lines = []
     lines.append(f"以下為 {report_date} 每日宏觀資訊綜合早報摘要：")
     lines.append("")
+    
+    # ===== 休市提醒 =====
+    if holiday and holiday.get('has_alerts'):
+        today_closed = holiday.get('today_closed', [])
+        tomorrow_closed = holiday.get('tomorrow_closed', [])
+        upcoming = holiday.get('upcoming_holidays', [])
+        
+        if today_closed or tomorrow_closed:
+            lines.append("【市場休市提醒】")
+            if today_closed:
+                names = '、'.join(today_closed) if isinstance(today_closed[0], str) else '、'.join(a.get('name_zh', '') for a in today_closed)
+                lines.append(f"\u26a0\ufe0f 今日休市：{names}（數據為前一交易日收盤）")
+            if tomorrow_closed:
+                names = '、'.join(tomorrow_closed) if isinstance(tomorrow_closed[0], str) else '、'.join(a.get('name_zh', '') for a in tomorrow_closed)
+                next_biz = holiday.get('next_business_day', '')
+                lines.append(f"\U0001f4c5 明日休市提醒：{names}（{next_biz}）")
+            if upcoming:
+                for h in upcoming:
+                    if isinstance(h, dict):
+                        date_str = h.get('date', '')
+                        if '-' in date_str:
+                            parts = date_str.split('-')
+                            date_str = f"{parts[1]}/{parts[2]}"
+                        weekday = h.get('weekday', '')
+                        markets = h.get('markets', [])
+                        if isinstance(markets, list):
+                            mkt_str = '、'.join(markets)
+                        else:
+                            mkt_str = str(markets)
+                        lines.append(f"- {date_str}（週{weekday}）{mkt_str} 休市")
+            lines.append("")
     
     # ===== 市場總覽 =====
     overall = index_analysis.get('overall_summary', '')

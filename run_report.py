@@ -31,6 +31,7 @@ from modules.report_generator import (
     generate_us_report, generate_daily_report
 )
 from modules.economic_calendar import get_upcoming_events_from_news
+from modules.market_holidays import get_holiday_alerts, format_holiday_alerts_text
 
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reports')
 os.makedirs(REPORT_DIR, exist_ok=True)
@@ -247,6 +248,17 @@ def main():
     log(f"報告日期: {report_date}")
     log(f"========================================")
 
+    # 0. 偵測休市狀態
+    log("偵測各市場休市狀態...")
+    holiday_alerts = get_holiday_alerts()
+    if holiday_alerts['has_alerts']:
+        holiday_text = format_holiday_alerts_text(holiday_alerts)
+        for line in holiday_text.split('\n'):
+            if line.strip():
+                log(f"  {line}")
+    else:
+        log("  所有市場正常交易")
+
     # 1. 收集市場數據
     market_data = collect_market_data(report_type)
 
@@ -287,7 +299,8 @@ def main():
     if report_type in ('daily', 'all'):
         daily_report = generate_daily_report(
             market_data, news_events, hot_stocks, stock_analysis,
-            index_analysis, calendar_events, report_date
+            index_analysis, calendar_events, report_date,
+            holiday_alerts=holiday_alerts
         )
         reports['daily'] = save_report(daily_report, f"daily_report_{report_date}.md")
 
@@ -299,6 +312,16 @@ def main():
         'stock_analysis': stock_analysis,
         'calendar_events': calendar_events,
         'hot_stocks': serialize_hot_stocks(hot_stocks),
+        'holiday_alerts': {
+            'today_closed': [a['name_zh'] for a in holiday_alerts.get('today_closed', [])],
+            'tomorrow_closed': [a['name_zh'] for a in holiday_alerts.get('tomorrow_closed', [])],
+            'next_business_day': str(holiday_alerts.get('next_business_day', '')),
+            'upcoming_holidays': [
+                {'date': str(h['date']), 'weekday': h['weekday'], 'markets': h['market_names']}
+                for h in holiday_alerts.get('upcoming_holidays', [])
+            ],
+            'has_alerts': holiday_alerts.get('has_alerts', False),
+        },
         'report_date': report_date,
         'generated_at': datetime.now().isoformat(),
     }

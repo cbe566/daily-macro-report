@@ -389,15 +389,75 @@ def generate_calendar_section(calendar_events):
     return md
 
 
-# ==================== 綜合早報主函數 ====================
+# ==================== 休市提醒區塊 ====================
+
+def _generate_holiday_section(holiday_alerts):
+    """生成休市提醒 Markdown 區塊"""
+    md = ""
+    today_closed = holiday_alerts.get('today_closed', [])
+    tomorrow_closed = holiday_alerts.get('tomorrow_closed', [])
+    upcoming = holiday_alerts.get('upcoming_holidays', [])
+
+    if not (today_closed or tomorrow_closed or upcoming):
+        return md
+
+    md += "## \u26a0\ufe0f \u5e02\u5834\u4f11\u5e02\u63d0\u9192\n\n"
+
+    if today_closed:
+        names = [a['name_zh'] if isinstance(a, dict) else a for a in today_closed]
+        joined = '\u3001'.join(names)
+        md += "> **\u4eca\u65e5\u4f11\u5e02**\uff1a" + joined + "\uff08\u6578\u64da\u70ba\u524d\u4e00\u4ea4\u6613\u65e5\u6536\u76e4\uff09\n\n"
+
+    if tomorrow_closed:
+        names = [a['name_zh'] if isinstance(a, dict) else a for a in tomorrow_closed]
+        joined = '\u3001'.join(names)
+        next_biz = holiday_alerts.get('next_business_day', '')
+        if hasattr(next_biz, 'strftime'):
+            date_str = next_biz.strftime('%m/%d')
+        else:
+            date_str = str(next_biz)
+        md += "> **\u660e\u65e5\u4f11\u5e02\u63d0\u9192**\uff1a" + joined + "\uff08" + date_str + "\uff09\n\n"
+
+    if upcoming:
+        md += "| \u65e5\u671f | \u661f\u671f | \u4f11\u5e02\u5e02\u5834 |\n"
+        md += "|------|------|----------|\n"
+        for h in upcoming:
+            if isinstance(h, dict):
+                date_val = h.get('date', '')
+                if hasattr(date_val, 'strftime'):
+                    date_str = date_val.strftime('%m/%d')
+                else:
+                    date_str = str(date_val)
+                    if '-' in date_str:
+                        parts = date_str.split('-')
+                        date_str = parts[1] + "/" + parts[2]
+                weekday = h.get('weekday', '')
+                market_names = h.get('market_names', h.get('markets', []))
+                if isinstance(market_names, list):
+                    mkt_str = '\u3001'.join(market_names)
+                else:
+                    mkt_str = str(market_names)
+                md += "| " + date_str + " | \u9031" + weekday + " | " + mkt_str + " |\n"
+        md += "\n"
+
+    md += "---\n\n"
+    return md
+
+
+# ==================== \u7d9c\u5408\u65e9\u5831\u4e3b\u51fd\u6578 ====================
 
 def generate_daily_report(market_data, news_events, hot_stocks, stock_analysis,
-                          index_analysis, calendar_events, report_date):
+                          index_analysis, calendar_events, report_date,
+                          holiday_alerts=None):
     """生成每日宏觀資訊綜合早報"""
 
     # 標題區
     md = "# 每日宏觀資訊綜合早報\n\n"
     md += f"**{report_date}** ｜ 綜合早報\n\n"
+
+    # 休市提醒（如有）
+    if holiday_alerts and holiday_alerts.get('has_alerts'):
+        md += _generate_holiday_section(holiday_alerts)
 
     # 市場速覽（開頭一目了然）
     md += generate_market_snapshot(market_data, news_events, hot_stocks, index_analysis)
