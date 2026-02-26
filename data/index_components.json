@@ -7,79 +7,11 @@
       "count": 536,
       "stocks": [
         {
-          "symbol": "Conglomerate",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Financial services",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Biopharmaceutical",
-          "name": "NASDAQ"
-        },
-        {
           "symbol": "Retailing",
           "name": "NASDAQ"
         },
         {
-          "symbol": "Information technology",
-          "name": "NASDAQ"
-        },
-        {
-          "symbol": "Aerospace and defense",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Construction and mining",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Petroleum industry",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Drink industry",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Broadcasting and entertainment",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Home Improvement",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Pharmaceutical industry",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Food industry",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Clothing industry",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Fast-moving consumer goods",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Specialty chemicals",
-          "name": "NYSE"
-        },
-        {
           "symbol": "Insurance",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Managed health care",
-          "name": "NYSE"
-        },
-        {
-          "symbol": "Telecommunications industry",
           "name": "NYSE"
         },
         {

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-熱門股票偵測模組（v3 — 混合 API 高效版）
+熱門股票偵測模組（v4 — yfinance 統一版）
 
 數據來源：
-  - 美股：Polygon.io Grouped Daily Bars（一次呼叫獲取全市場 OHLCV）
-  - 日股/台股/港股：Yahoo Finance（分批多線程查詢）
+  - 美股：yfinance 批量下載（yf.download，一次最多 90 支，分批）
+  - 日股/台股/港股：yfinance 批量下載（同上）
 
 候選池：
-  - 美股：道瓊30 + S&P 500 + NASDAQ 100（~536 支）
+  - 美股：道瓊30 + S&P 500 + NASDAQ 100（~519 支）
   - 日股：日經 225（~226 支）
   - 台股：台灣 50 + 中型 100（~150 支）
   - 港股：恆生指數（~85 支）
@@ -19,6 +19,11 @@
   第三層（加分）：  有新聞提及的優先（tiebreaker）
 
 顯示上限：每市場最多 5 支買入 + 5 支賣出
+
+v4 變更：
+  - 美股從 Polygon Grouped Daily Bars 改為 yfinance 批量下載
+  - 解決 Polygon 免費方案無法取得當天數據的問題
+  - 所有市場統一使用 yfinance，數據即時且穩定
 """
 import sys
 sys.path.append('/opt/.manus/.sandbox-runtime')
@@ -26,10 +31,9 @@ sys.path.append('/opt/.manus/.sandbox-runtime')
 import json
 import os
 import time
-import requests
 import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from data_api import ApiClient
+import io
+from contextlib import redirect_stderr
 
 # ==================== 量比門檻設定 ====================
 MIN_VOLUME_RATIO_BUY = 1.5    # 買入放量：量比 ≥ 1.5x + 上漲
@@ -42,16 +46,10 @@ FLOW_SELL = 'outflow'         # 資金出清（賣出放量下跌）
 # ==================== 顯示上限 ====================
 MAX_PER_FLOW = 5              # 每市場每方向最多顯示 5 支
 
-# ==================== Yahoo Finance 查詢設定 ====================
-YF_MAX_WORKERS = 5            # Yahoo Finance 並行線程數
-YF_BATCH_SIZE = 40            # 每批查詢股票數
-YF_BATCH_DELAY = 5            # 批次間休息秒數
-YF_RETRY_DELAY = 8            # 重試前等待秒數
-
-# ==================== Polygon API 設定 ====================
-POLYGON_API_KEY = os.environ.get('POLYGON_API_KEY', '')
-POLYGON_HISTORY_DAYS = 10     # 查詢歷史天數（用於計算平均成交量）
-POLYGON_REQUEST_DELAY = 13    # Polygon 請求間隔（秒），免費版限 5 req/min
+# ==================== yfinance 批量下載設定 ====================
+YF_BATCH_SIZE = 90            # 每批下載股票數（yf.download 批量）
+YF_BATCH_DELAY = 3            # 批次間休息秒數
+YF_DOWNLOAD_PERIOD = '1mo'    # 下載期間（1 個月，用於計算平均成交量）
 
 # ==================== 成分股快取路徑 ====================
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
@@ -79,206 +77,6 @@ def load_stock_pool(market_code):
     return symbols
 
 
-def get_trading_dates(end_date, num_days):
-    """
-    生成指定日期往前的 N 個交易日（排除週末）
-    
-    Args:
-        end_date: datetime.date 物件
-        num_days: 需要的交易日數量
-    Returns:
-        list of date strings ['2026-02-24', '2026-02-23', ...]，最新日期在前
-    """
-    dates = []
-    d = end_date
-    while len(dates) < num_days:
-        if d.weekday() < 5:  # 0=Mon, 4=Fri
-            dates.append(d.strftime('%Y-%m-%d'))
-        d -= datetime.timedelta(days=1)
-    return dates
-
-
-# ================================================================
-#  美股：Polygon.io Grouped Daily Bars（批量查詢）
-# ================================================================
-
-def polygon_fetch_grouped_daily(date_str):
-    """
-    用 Polygon Grouped Daily Bars API 獲取某天所有美股的 OHLCV
-    
-    一次呼叫返回 ~11,000+ 支股票的數據
-    
-    Returns:
-        dict: {ticker: {open, high, low, close, volume, vwap, n_transactions}} or None
-    """
-    url = f'https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{date_str}'
-    params = {'adjusted': 'true', 'apiKey': POLYGON_API_KEY}
-    
-    try:
-        resp = requests.get(url, params=params, timeout=30)
-        
-        if resp.status_code == 429:
-            # 速率限制，等待後重試
-            print(f"    {date_str}: 速率限制，等待 15 秒重試...")
-            time.sleep(15)
-            resp = requests.get(url, params=params, timeout=30)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data.get('results', [])
-            ticker_data = {}
-            for r in results:
-                ticker_data[r['T']] = {
-                    'open': r.get('o', 0),
-                    'high': r.get('h', 0),
-                    'low': r.get('l', 0),
-                    'close': r.get('c', 0),
-                    'volume': r.get('v', 0),
-                    'vwap': r.get('vw', 0),
-                    'n_transactions': r.get('n', 0),
-                }
-            return ticker_data
-        else:
-            print(f"    {date_str}: HTTP {resp.status_code}")
-            return None
-            
-    except Exception as e:
-        print(f"    {date_str}: 錯誤 - {e}")
-        return None
-
-
-def polygon_scan_us_market(symbols, target_date=None):
-    """
-    用 Polygon API 批量掃描美股
-    
-    策略：
-    1. 先探測最近有數據的交易日
-    2. 查詢該日 + 前 N-1 天的 Grouped Daily Bars
-    3. 計算每支成分股的量比和漲跌幅
-    
-    Args:
-        symbols: 成分股代碼列表
-        target_date: 目標日期 (datetime.date)，默認為今天
-    
-    Returns:
-        list of stock dicts
-    """
-    if not POLYGON_API_KEY:
-        print("  [警告] POLYGON_API_KEY 未設定，改用 Yahoo Finance")
-        return yahoo_scan_market(symbols, '美股')
-    
-    if target_date is None:
-        target_date = datetime.date.today()
-    
-    # 生成足夠多的候選交易日（多生成幾天以應對假日）
-    candidate_dates = get_trading_dates(target_date, POLYGON_HISTORY_DAYS + 5)
-    
-    # 逐天查詢，找到第一個有數據的日期作為目標日
-    daily_data = {}  # {date_str: {ticker: data}}
-    start_time = time.time()
-    dates_with_data = []  # 有數據的日期列表（按時間倒序）
-    
-    print(f"  [美股-Polygon] 查詢最近 {POLYGON_HISTORY_DAYS} 個有數據的交易日...")
-    
-    for i, date_str in enumerate(candidate_dates):
-        if len(dates_with_data) >= POLYGON_HISTORY_DAYS:
-            break
-            
-        data = polygon_fetch_grouped_daily(date_str)
-        if data and len(data) > 1000:  # 有效數據（正常應有 11000+ 支）
-            daily_data[date_str] = data
-            dates_with_data.append(date_str)
-            count = len(data)
-            elapsed = time.time() - start_time
-            print(f"    [{len(dates_with_data)}/{POLYGON_HISTORY_DAYS}] {date_str}: {count} 支 ({elapsed:.0f}s)")
-        else:
-            elapsed = time.time() - start_time
-            print(f"    [跳過] {date_str}: 無數據或非交易日 ({elapsed:.0f}s)")
-        
-        # 速率限制：每次間隔 13 秒
-        if len(dates_with_data) < POLYGON_HISTORY_DAYS and i < len(candidate_dates) - 1:
-            time.sleep(POLYGON_REQUEST_DELAY)
-    
-    elapsed = time.time() - start_time
-    print(f"  [美股-Polygon] 數據收集完成: {len(dates_with_data)} 天成功, 耗時 {elapsed:.0f}s")
-    
-    if len(dates_with_data) < 2:
-        print("  [警告] 數據不足，改用 Yahoo Finance")
-        return yahoo_scan_market(symbols, '美股')
-    
-    # 最新有數據的日期 = 目標日
-    target_date_str = dates_with_data[0]
-    prev_date_str = dates_with_data[1]
-    print(f"  [美股-Polygon] 目標交易日: {target_date_str}")
-    
-    if target_date_str not in daily_data:
-        print(f"  [警告] 目標日 {target_date_str} 無數據")
-        return []
-    
-    target_day = daily_data[target_date_str]
-    prev_day = daily_data.get(prev_date_str, {})
-    
-    # 建立成分股 symbol 集合（去掉後綴）
-    symbol_set = set(symbols)
-    
-    results = []
-    for symbol in symbols:
-        if symbol not in target_day:
-            continue
-        
-        today = target_day[symbol]
-        curr_close = today['close']
-        curr_volume = today['volume']
-        
-        if not curr_close or not curr_volume or curr_volume == 0:
-            continue
-        
-        # 漲跌幅：用前一天收盤價
-        prev_close = None
-        if symbol in prev_day:
-            prev_close = prev_day[symbol]['close']
-        
-        if not prev_close or prev_close == 0:
-            continue
-        
-        change_pct = ((curr_close - prev_close) / prev_close) * 100
-        
-        # 量比：當日成交量 / 前 N-1 天平均成交量
-        history_volumes = []
-        for date_str in dates_with_data[1:]:  # 排除當日
-            if date_str in daily_data and symbol in daily_data[date_str]:
-                vol = daily_data[date_str][symbol]['volume']
-                if vol and vol > 0:
-                    history_volumes.append(vol)
-        
-        if history_volumes:
-            avg_volume = sum(history_volumes) / len(history_volumes)
-        else:
-            avg_volume = curr_volume  # 無歷史數據，量比為 1
-        
-        volume_ratio = curr_volume / avg_volume if avg_volume > 0 else 1
-        
-        results.append({
-            'symbol': symbol,
-            'name': symbol,  # Polygon 不提供公司名，後續可從快取補充
-            'current': round(curr_close, 2),
-            'previous': round(prev_close, 2),
-            'change': round(curr_close - prev_close, 2),
-            'change_pct': round(change_pct, 2),
-            'volume': int(curr_volume),
-            'avg_volume': round(avg_volume),
-            'volume_ratio': round(volume_ratio, 2),
-            'market': '美股',
-        })
-    
-    print(f"  [美股-Polygon] 成分股匹配: {len(results)}/{len(symbols)} 支")
-    
-    # 補充公司名稱（從成分股快取）
-    _enrich_names(results, 'US')
-    
-    return results
-
-
 def _enrich_names(stocks, market_code):
     """從成分股快取補充公司名稱"""
     try:
@@ -294,140 +92,137 @@ def _enrich_names(stocks, market_code):
 
 
 # ================================================================
-#  日股/台股/港股：Yahoo Finance（分批多線程查詢）
+#  yfinance 批量下載（所有市場統一使用）
 # ================================================================
 
-def fetch_single_stock_yf(symbol):
-    """用 Yahoo Finance 查詢單支股票的最新交易數據"""
-    try:
-        client = ApiClient()
-        response = client.call_api('YahooFinance/get_stock_chart', query={
-            'symbol': symbol,
-            'region': 'US',
-            'interval': '1d',
-            'range': '1mo'
-        })
-
-        if not response or 'chart' not in response or 'result' not in response['chart']:
-            return None
-
-        result = response['chart']['result'][0]
-        meta = result['meta']
-        quotes = result['indicators']['quote'][0]
-        timestamps = result.get('timestamp', [])
-
-        if len(timestamps) < 5:
-            return None
-
-        curr_close = quotes['close'][-1]
-        prev_close = quotes['close'][-2]
-        curr_volume = quotes['volume'][-1]
-
-        if curr_close is None or prev_close is None or curr_volume is None:
-            return None
-        if curr_volume == 0:
-            return None
-
-        change_pct = ((curr_close - prev_close) / prev_close * 100) if prev_close else 0
-
-        # 計算過去天數的平均成交量（排除最近一天）
-        valid_volumes = [v for v in quotes['volume'][:-1] if v is not None and v > 0]
-        avg_volume = sum(valid_volumes) / len(valid_volumes) if valid_volumes else curr_volume
-        volume_ratio = curr_volume / avg_volume if avg_volume > 0 else 1
-
-        return {
-            'symbol': symbol,
-            'name': meta.get('longName', meta.get('shortName', symbol)),
-            'current': round(curr_close, 2),
-            'previous': round(prev_close, 2),
-            'change': round(curr_close - prev_close, 2),
-            'change_pct': round(change_pct, 2),
-            'volume': curr_volume,
-            'avg_volume': round(avg_volume),
-            'volume_ratio': round(volume_ratio, 2),
-        }
-
-    except Exception:
-        return None
-
-
-def yahoo_scan_market(symbols, market_name):
+def yfinance_batch_scan(symbols, market_name, market_code='US'):
     """
-    用 Yahoo Finance 分批多線程掃描一個市場
-    
-    策略：每批 YF_BATCH_SIZE 支，YF_MAX_WORKERS 線程並行，
-    批次間休息 YF_BATCH_DELAY 秒，失敗的自動重試一次
+    用 yfinance 批量下載掃描一個市場的所有成分股
+
+    策略：
+    1. 用 yf.download() 批量下載 1 個月日線數據
+    2. 每批最多 YF_BATCH_SIZE 支，批次間休息
+    3. 從下載的數據計算量比和漲跌幅
+    4. 自動過濾無效 ticker
+
+    Args:
+        symbols: 成分股代碼列表
+        market_name: 市場名稱（用於日誌）
+        market_code: 市場代碼（用於補充名稱）
+
+    Returns:
+        list of stock dicts
     """
+    import yfinance as yf
+
     results = []
-    success = 0
-    failed_symbols = []
+    total_success = 0
+    total_failed = 0
     start_time = time.time()
     total_batches = (len(symbols) + YF_BATCH_SIZE - 1) // YF_BATCH_SIZE
 
-    print(f"  [{market_name}-Yahoo] 開始掃描 {len(symbols)} 支（{total_batches} 批 x {YF_BATCH_SIZE} 支，{YF_MAX_WORKERS} 線程）...")
+    print(f"  [{market_name}-yfinance] 開始批量下載 {len(symbols)} 支（{total_batches} 批 x {YF_BATCH_SIZE} 支）...")
 
-    # === 第一輪：分批查詢 ===
     for batch_idx in range(0, len(symbols), YF_BATCH_SIZE):
         batch = symbols[batch_idx:batch_idx + YF_BATCH_SIZE]
         batch_num = batch_idx // YF_BATCH_SIZE + 1
 
-        with ThreadPoolExecutor(max_workers=YF_MAX_WORKERS) as executor:
-            future_to_symbol = {}
+        try:
+            # 靜默下載，抑制 yfinance 的錯誤輸出
+            stderr_capture = io.StringIO()
+            with redirect_stderr(stderr_capture):
+                df = yf.download(
+                    batch,
+                    period=YF_DOWNLOAD_PERIOD,
+                    interval='1d',
+                    group_by='ticker',
+                    progress=False,
+                    threads=True
+                )
+
+            if df.empty:
+                total_failed += len(batch)
+                elapsed = time.time() - start_time
+                print(f"    批次 {batch_num}/{total_batches}: 0 成功, {len(batch)} 失敗 ({elapsed:.0f}s)")
+                continue
+
+            batch_success = 0
+            batch_failed = 0
+
+            # 處理單支 vs 多支的不同 DataFrame 結構
+            is_single = len(batch) == 1
+
             for symbol in batch:
-                future = executor.submit(fetch_single_stock_yf, symbol)
-                future_to_symbol[future] = symbol
+                try:
+                    if is_single:
+                        stock_df = df
+                    else:
+                        if symbol not in df.columns.get_level_values(0).unique():
+                            batch_failed += 1
+                            continue
+                        stock_df = df[symbol]
 
-            for future in as_completed(future_to_symbol):
-                sym = future_to_symbol[future]
-                data = future.result()
-                if data:
-                    data['market'] = market_name
-                    results.append(data)
-                    success += 1
-                else:
-                    failed_symbols.append(sym)
+                    # 去除 NaN 行
+                    stock_df = stock_df.dropna(subset=['Close', 'Volume'])
 
-        elapsed = time.time() - start_time
-        print(f"    批次 {batch_num}/{total_batches}: {success} 成功, {len(failed_symbols)} 失敗 ({elapsed:.0f}s)")
+                    if len(stock_df) < 5:
+                        batch_failed += 1
+                        continue
 
+                    curr_close = float(stock_df['Close'].iloc[-1])
+                    prev_close = float(stock_df['Close'].iloc[-2])
+                    curr_volume = float(stock_df['Volume'].iloc[-1])
+
+                    if curr_close <= 0 or prev_close <= 0 or curr_volume <= 0:
+                        batch_failed += 1
+                        continue
+
+                    change_pct = ((curr_close - prev_close) / prev_close) * 100
+
+                    # 計算平均成交量（排除最近一天）
+                    hist_volumes = stock_df['Volume'].iloc[:-1]
+                    valid_volumes = hist_volumes[hist_volumes > 0]
+                    avg_volume = float(valid_volumes.mean()) if len(valid_volumes) > 0 else curr_volume
+                    volume_ratio = curr_volume / avg_volume if avg_volume > 0 else 1
+
+                    results.append({
+                        'symbol': symbol,
+                        'name': symbol,
+                        'current': round(curr_close, 2),
+                        'previous': round(prev_close, 2),
+                        'change': round(curr_close - prev_close, 2),
+                        'change_pct': round(change_pct, 2),
+                        'volume': int(curr_volume),
+                        'avg_volume': round(avg_volume),
+                        'volume_ratio': round(volume_ratio, 2),
+                        'market': market_name,
+                    })
+                    batch_success += 1
+
+                except Exception:
+                    batch_failed += 1
+
+            total_success += batch_success
+            total_failed += batch_failed
+            elapsed = time.time() - start_time
+            print(f"    批次 {batch_num}/{total_batches}: {batch_success} 成功, {batch_failed} 失敗 ({elapsed:.0f}s)")
+
+        except Exception as e:
+            total_failed += len(batch)
+            elapsed = time.time() - start_time
+            print(f"    批次 {batch_num}/{total_batches}: 錯誤 - {e} ({elapsed:.0f}s)")
+
+        # 批次間休息
         if batch_idx + YF_BATCH_SIZE < len(symbols):
             time.sleep(YF_BATCH_DELAY)
 
-    # === 第二輪：重試失敗的 ===
-    if failed_symbols:
-        print(f"  [{market_name}-Yahoo] 重試 {len(failed_symbols)} 支失敗股票...")
-        time.sleep(YF_RETRY_DELAY)
-        
-        retry_success = 0
-        still_failed = 0
-
-        for batch_idx in range(0, len(failed_symbols), YF_BATCH_SIZE):
-            batch = failed_symbols[batch_idx:batch_idx + YF_BATCH_SIZE]
-
-            with ThreadPoolExecutor(max_workers=YF_MAX_WORKERS) as executor:
-                future_to_symbol = {}
-                for symbol in batch:
-                    future = executor.submit(fetch_single_stock_yf, symbol)
-                    future_to_symbol[future] = symbol
-
-                for future in as_completed(future_to_symbol):
-                    data = future.result()
-                    if data:
-                        data['market'] = market_name
-                        results.append(data)
-                        retry_success += 1
-                    else:
-                        still_failed += 1
-
-            if batch_idx + YF_BATCH_SIZE < len(failed_symbols):
-                time.sleep(YF_BATCH_DELAY)
-
-        success += retry_success
-        print(f"  [{market_name}-Yahoo] 重試結果: {retry_success} 成功, {still_failed} 仍失敗")
-
     elapsed = time.time() - start_time
-    rate = len(results) / len(symbols) * 100 if symbols else 0
-    print(f"  [{market_name}-Yahoo] 掃描完成: {len(results)}/{len(symbols)} 成功 ({rate:.0f}%), 耗時 {elapsed:.1f}s")
+    rate = total_success / len(symbols) * 100 if symbols else 0
+    print(f"  [{market_name}-yfinance] 掃描完成: {total_success}/{len(symbols)} 成功 ({rate:.0f}%), 耗時 {elapsed:.1f}s")
+
+    # 補充公司名稱
+    _enrich_names(results, market_code)
+
     return results
 
 
@@ -507,6 +302,14 @@ def apply_news_tiebreaker(stocks, news_trending_tickers):
 #  主入口
 # ================================================================
 
+MARKET_CONFIG = {
+    'US': {'name': '美股', 'code': 'US'},
+    'JP': {'name': '日股', 'code': 'JP'},
+    'TW': {'name': '台股', 'code': 'TW'},
+    'HK': {'name': '港股', 'code': 'HK'},
+}
+
+
 def detect_hot_stocks_v2(market_code, market_name, news_trending_tickers=None):
     """
     完整流程：載入成分股 → 掃描 → 分層篩選 → 新聞加分
@@ -518,11 +321,8 @@ def detect_hot_stocks_v2(market_code, market_name, news_trending_tickers=None):
     if not symbols:
         return {'inflow': [], 'outflow': []}
 
-    # 根據市場選擇 API
-    if market_code == 'US':
-        raw_data = polygon_scan_us_market(symbols)
-    else:
-        raw_data = yahoo_scan_market(symbols, market_name)
+    # 所有市場統一使用 yfinance 批量下載
+    raw_data = yfinance_batch_scan(symbols, market_name, market_code)
 
     # 分層漏斗篩選
     inflow, outflow = apply_funnel_filter(raw_data, market_name)
@@ -594,12 +394,12 @@ if __name__ == '__main__':
     print(f"每市場上限：買入 {MAX_PER_FLOW} 支 + 賣出 {MAX_PER_FLOW} 支")
     print()
 
-    # 測試美股（Polygon）
+    # 測試美股
     print("=" * 50)
-    print("測試美股（Polygon Grouped Daily Bars）...")
+    print("測試美股（yfinance 批量下載）...")
     us_symbols = load_stock_pool('US')
     if us_symbols:
-        us_data = polygon_scan_us_market(us_symbols[:10])  # 先測 10 支
+        us_data = yfinance_batch_scan(us_symbols[:20], '美股', 'US')
         print(f"測試結果: {len(us_data)} 支")
-        for s in us_data[:3]:
-            print(f"  {s['symbol']:8s} {s['change_pct']:+6.2f}% | Vol {s['volume_ratio']:.1f}x")
+        for s in us_data[:5]:
+            print(f"  {s['symbol']:8s} {s['change_pct']:+6.2f}% | Vol {s['volume_ratio']:.1f}x | Close {s['current']}")
