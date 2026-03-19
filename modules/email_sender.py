@@ -26,8 +26,41 @@ SMTP_CONFIG = {
 }
 
 
+def _parse_recipient(item):
+    """解析收件人項目，支援字串或 {name, email} 格式
+    
+    Returns:
+        dict: {'name': str or None, 'email': str}
+    """
+    if isinstance(item, dict):
+        return {'name': item.get('name'), 'email': item['email']}
+    else:
+        return {'name': None, 'email': item}
+
+
+def _format_recipient_addr(recipient):
+    """將收件人格式化為 RFC 5322 地址格式
+    
+    Args:
+        recipient: dict with 'name' and 'email' keys
+    Returns:
+        str: 'Name <email>' or 'email'
+    """
+    if recipient.get('name'):
+        return f"{recipient['name']} <{recipient['email']}>"
+    return recipient['email']
+
+
 def load_recipients(group=None):
-    """讀取收件人清單"""
+    """讀取收件人清單
+    
+    支援兩種格式：
+    - 舊格式（純字串）: ["a@b.com", "c@d.com"]
+    - 新格式（帶名字）: [{"name": "Alice", "email": "a@b.com"}, ...]
+    
+    Returns:
+        dict: {'to': [{'name': str|None, 'email': str}, ...], 'cc': [...], 'bcc': [...]}
+    """
     with open(RECIPIENTS_FILE, 'r', encoding='utf-8') as f:
         config = json.load(f)
     
@@ -36,13 +69,13 @@ def load_recipients(group=None):
     
     group_data = config['groups'].get(group, {})
     return {
-        'to': group_data.get('to', []),
-        'cc': group_data.get('cc', []),
-        'bcc': group_data.get('bcc', [])
+        'to': [_parse_recipient(r) for r in group_data.get('to', [])],
+        'cc': [_parse_recipient(r) for r in group_data.get('cc', [])],
+        'bcc': [_parse_recipient(r) for r in group_data.get('bcc', [])]
     }
 
 
-def add_recipient(email, group='default', role='to'):
+def add_recipient(email, name=None, group='default', role='to'):
     """新增收件人"""
     with open(RECIPIENTS_FILE, 'r', encoding='utf-8') as f:
         config = json.load(f)
@@ -55,22 +88,46 @@ def add_recipient(email, group='default', role='to'):
             'bcc': []
         }
     
-    if email not in config['groups'][group][role]:
-        config['groups'][group][role].append(email)
+    # 檢查是否已存在（相容新舊格式）
+    existing_emails = []
+    for item in config['groups'][group][role]:
+        if isinstance(item, dict):
+            existing_emails.append(item['email'])
+        else:
+            existing_emails.append(item)
+    
+    if email not in existing_emails:
+        entry = {'name': name, 'email': email} if name else email
+        config['groups'][group][role].append(entry)
     
     with open(RECIPIENTS_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
     
-    print(f"已新增 {email} 到 {group} 群組的 {role} 清單")
+    display = f"{name} <{email}>" if name else email
+    print(f"已新增 {display} 到 {group} 群組的 {role} 清單")
 
 
 def remove_recipient(email, group='default', role='to'):
-    """移除收件人"""
+    """移除收件人（相容新舊格式）"""
     with open(RECIPIENTS_FILE, 'r', encoding='utf-8') as f:
         config = json.load(f)
     
-    if group in config['groups'] and email in config['groups'][group].get(role, []):
-        config['groups'][group][role].remove(email)
+    if group not in config['groups']:
+        print(f"未找到 {email} 在 {group} 群組的 {role} 清單中")
+        return
+    
+    role_list = config['groups'][group].get(role, [])
+    found = False
+    new_list = []
+    for item in role_list:
+        item_email = item['email'] if isinstance(item, dict) else item
+        if item_email == email:
+            found = True
+        else:
+            new_list.append(item)
+    
+    if found:
+        config['groups'][group][role] = new_list
         with open(RECIPIENTS_FILE, 'w', encoding='utf-8') as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
         print(f"已從 {group} 群組的 {role} 清單移除 {email}")
@@ -79,9 +136,23 @@ def remove_recipient(email, group='default', role='to'):
 
 
 def list_recipients():
-    """列出所有收件人"""
+    """列出所有收件人（顯示名字）"""
     with open(RECIPIENTS_FILE, 'r', encoding='utf-8') as f:
         config = json.load(f)
+    
+    def _display_list(items):
+        """格式化收件人列表顯示"""
+        if not items:
+            return '無'
+        parts = []
+        for item in items:
+            if isinstance(item, dict):
+                name = item.get('name', '')
+                email = item.get('email', '')
+                parts.append(f"{name} <{email}>" if name else email)
+            else:
+                parts.append(item)
+        return ', '.join(parts)
     
     print(f"當前啟用群組：{config.get('active_group', 'default')}")
     print("=" * 50)
@@ -89,9 +160,9 @@ def list_recipients():
     for group_name, group_data in config['groups'].items():
         desc = group_data.get('description', '')
         print(f"\n群組：{group_name} ({desc})")
-        print(f"  收件人 (To)：{', '.join(group_data.get('to', [])) or '無'}")
-        print(f"  副本 (CC)：{', '.join(group_data.get('cc', [])) or '無'}")
-        print(f"  密件副本 (BCC)：{', '.join(group_data.get('bcc', [])) or '無'}")
+        print(f"  收件人 (To)：{_display_list(group_data.get('to', []))}")
+        print(f"  副本 (CC)：{_display_list(group_data.get('cc', []))}")
+        print(f"  密件副本 (BCC)：{_display_list(group_data.get('bcc', []))}")
 
 
 def _format_pct(pct):
@@ -304,8 +375,15 @@ def send_report_email(report_date, pdf_path, json_path=None, group=None):
     
     # 合併所有收件人（不管放在 to/cc/bcc，全部逐封發送）
     all_recipients = list(recipients.get('to', [])) + list(recipients.get('cc', [])) + list(recipients.get('bcc', []))
-    # 去重
-    all_recipients = list(dict.fromkeys(all_recipients))
+    # 去重（以 email 為 key）
+    seen = set()
+    unique_recipients = []
+    for r in all_recipients:
+        email = r['email'] if isinstance(r, dict) else r
+        if email not in seen:
+            seen.add(email)
+            unique_recipients.append(r)
+    all_recipients = unique_recipients
     if not all_recipients:
         print("錯誤：沒有收件人")
         return False
@@ -357,10 +435,20 @@ def send_report_email(report_date, pdf_path, json_path=None, group=None):
         
         for recipient in all_recipients:
             try:
+                # 解析收件人資訊
+                if isinstance(recipient, dict):
+                    rcpt_email = recipient['email']
+                    rcpt_name = recipient.get('name')
+                    rcpt_display = f"{rcpt_name} <{rcpt_email}>" if rcpt_name else rcpt_email
+                else:
+                    rcpt_email = recipient
+                    rcpt_name = None
+                    rcpt_display = recipient
+                
                 # 每封信獨立構建，To 只有該收件者
                 msg = MIMEMultipart()
                 msg['From'] = f"{SMTP_CONFIG['sender_name']} <{SMTP_CONFIG['sender_email']}>"
-                msg['To'] = recipient
+                msg['To'] = rcpt_display
                 msg['Subject'] = subject
                 
                 msg.attach(MIMEText(content, 'plain', 'utf-8'))
@@ -373,12 +461,12 @@ def send_report_email(report_date, pdf_path, json_path=None, group=None):
                     pdf_attachment.add_header('Content-Disposition', 'attachment', filename=pdf_filename)
                     msg.attach(pdf_attachment)
                 
-                server.sendmail(SMTP_CONFIG['sender_email'], [recipient], msg.as_string())
+                server.sendmail(SMTP_CONFIG['sender_email'], [rcpt_email], msg.as_string())
                 success_count += 1
-                print(f"  ✅ {recipient}")
+                print(f"  ✅ {rcpt_display}")
             except Exception as e:
-                fail_list.append(recipient)
-                print(f"  ❌ {recipient} — {e}")
+                fail_list.append(rcpt_display)
+                print(f"  ❌ {rcpt_display} — {e}")
         
         server.quit()
         
