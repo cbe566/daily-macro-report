@@ -18,7 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules.market_data import (
     get_asia_indices, get_europe_indices, get_us_indices,
-    get_commodities, get_forex, get_bonds, get_crypto
+    get_commodities, get_forex, get_bonds, get_crypto,
+    get_emerging_indices
 )
 from modules.news_collector import get_news_for_date
 from modules.hot_stocks import get_all_hot_stocks
@@ -32,6 +33,7 @@ from modules.report_generator import (
 )
 from modules.economic_calendar import get_upcoming_events_from_news
 from modules.market_holidays import get_holiday_alerts, format_holiday_alerts_text
+from modules.sentiment_data import collect_all_enhanced_data
 
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reports')
 os.makedirs(REPORT_DIR, exist_ok=True)
@@ -77,6 +79,16 @@ def collect_market_data(report_type='daily'):
         log("  獲取加密貨幣...")
         data['crypto'] = get_crypto()
         log(f"  ✓ 加密貨幣: {len(data.get('crypto', {}))} 項")
+
+        # 新增：新興市場指數
+        log("  獲取新興市場指數...")
+        try:
+            emerging = get_emerging_indices()
+            if emerging:
+                data['emerging_indices'] = {item['name']: item for item in emerging}
+                log(f"  ✓ 新興市場指數: {len(emerging)} 項")
+        except Exception as e:
+            log(f"  ✗ 新興市場指數: {e}")
 
     return data
 
@@ -273,6 +285,17 @@ def main():
         market_data, news_data, hot_stocks
     )
 
+    # 4.5 收集增強版數據（情緒指標、美林時鐘、資金流向）
+    enhanced_data = {}
+    if report_type in ('daily', 'all'):
+        log("開始收集增強版數據（情緒、美林時鐘、資金流向）...")
+        try:
+            enhanced_data = collect_all_enhanced_data()
+            log("  ✓ 增強版數據收集完成")
+        except Exception as e:
+            log(f"  ✗ 增強版數據收集失敗: {e}")
+            enhanced_data = {'sentiment': {}, 'clock': {}, 'fund_flows': {}, 'emerging_indices': []}
+
     # 5. 生成報告
     log("開始生成報告...")
 
@@ -322,6 +345,10 @@ def main():
             ],
             'has_alerts': holiday_alerts.get('has_alerts', False),
         },
+        # 新增：增強版數據
+        'sentiment_data': enhanced_data.get('sentiment', {}),
+        'clock_data': enhanced_data.get('clock', {}),
+        'fund_flows': enhanced_data.get('fund_flows', {}),
         'report_date': report_date,
         'generated_at': datetime.now().isoformat(),
     }

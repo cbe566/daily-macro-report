@@ -68,6 +68,11 @@ def main():
     index_analysis = raw.get('index_analysis', {})
     calendar_events = raw.get('calendar_events', [])
 
+    # 新增：增強版數據
+    sentiment_data = raw.get('sentiment_data', {})
+    clock_data = raw.get('clock_data', {})
+    fund_flows = raw.get('fund_flows', {})
+
     # 確保格式相容
     hot_stocks = _ensure_flow_compat(hot_stocks)
 
@@ -84,7 +89,10 @@ def main():
     print("Generating HTML report...")
     html_content = generate_html_report(
         market_data, news_events, hot_stocks, stock_analysis,
-        index_analysis, calendar_events, report_date
+        index_analysis, calendar_events, report_date,
+        sentiment_data=sentiment_data,
+        clock_data=clock_data,
+        fund_flows=fund_flows,
     )
 
     # Save HTML

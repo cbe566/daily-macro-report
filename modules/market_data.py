@@ -84,6 +84,17 @@ CRYPTO = {
     'Dogecoin': 'DOGE-USD',
 }
 
+# ==================== 新興市場指數定義 ====================
+
+EMERGING_INDICES = {
+    '印度SENSEX': '^BSESN',
+    '印度NIFTY50': '^NSEI',
+    '印尼雅加達綜合': '^JKSE',
+    '泰國SET': '^SET.BK',
+    '馬來西亞KLCI': '^KLSE',
+    '菲律賓PSEi': 'PSEI.PS',
+}
+
 
 def fetch_quote(symbol, name=None):
     """獲取單個標的的最新行情數據"""
@@ -168,6 +179,9 @@ def get_bonds():
 def get_crypto():
     return fetch_batch(CRYPTO)
 
+def get_emerging_indices():
+    return fetch_batch(EMERGING_INDICES)
+
 
 def get_all_market_data():
     """獲取所有市場數據"""
@@ -175,6 +189,7 @@ def get_all_market_data():
         'asia_indices': get_asia_indices(),
         'europe_indices': get_europe_indices(),
         'us_indices': get_us_indices(),
+        'emerging_indices': get_emerging_indices(),
         'commodities': get_commodities(),
         'forex': get_forex(),
         'bonds': get_bonds(),
