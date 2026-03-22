@@ -118,13 +118,25 @@ def fetch_quote(symbol, name=None):
                 prev_close = None
                 closes = quotes['close']
                 
-                # 從後往前找最新的有效數據
-                for i in range(len(closes) - 1, -1, -1):
+                # 去重：API 在週末/非交易時段可能在最後追加一個重複的數據點
+                # 用 UTC 日期去重，只保留每個交易日的第一個數據點
+                from datetime import datetime as _dt, timezone as _tz
+                seen_dates = set()
+                unique_closes = []
+                for i in range(len(closes)):
                     if closes[i] is not None:
+                        day = _dt.fromtimestamp(timestamps[i], tz=_tz.utc).strftime('%Y-%m-%d')
+                        if day not in seen_dates:
+                            seen_dates.add(day)
+                            unique_closes.append(closes[i])
+                
+                # 從後往前找最新的有效數據
+                for i in range(len(unique_closes) - 1, -1, -1):
+                    if unique_closes[i] is not None:
                         if curr_close is None:
-                            curr_close = closes[i]
+                            curr_close = unique_closes[i]
                         elif prev_close is None:
-                            prev_close = closes[i]
+                            prev_close = unique_closes[i]
                             break
                 
                 if curr_close is not None and prev_close is not None:
