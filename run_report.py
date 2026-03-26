@@ -34,6 +34,7 @@ from modules.report_generator import (
 from modules.economic_calendar import get_upcoming_events_from_news
 from modules.market_holidays import get_holiday_alerts, format_holiday_alerts_text
 from modules.sentiment_data import collect_all_enhanced_data
+from modules.news_fact_checker import fact_check_news
 
 REPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reports')
 os.makedirs(REPORT_DIR, exist_ok=True)
@@ -145,6 +146,16 @@ def run_ai_analysis(market_data, news_data, hot_stocks):
     news_events = analyze_macro_news(news_data['articles'], news_data['categorized'])
     log(f"  ✓ 歸納出 {len(news_events)} 條宏觀事件")
 
+    # 1.5 新聞事實查核（雙層機制）
+    log("  開始新聞事實查核...")
+    news_events, fact_check_report = fact_check_news(news_events, news_data['articles'])
+    if fact_check_report['corrections_applied'] > 0:
+        log(f"  ⚠ 事實查核已修正 {fact_check_report['corrections_applied']} 個問題")
+        for corr in fact_check_report.get('corrections_log', []):
+            log(f"    [{corr['source']}] [{corr['error_type']}] ({corr['severity']}) {corr.get('reason', '')[:60]}")
+    else:
+        log("  ✓ 事實查核通過，未發現問題")
+
     # 2. 分析指數漲跌原因
     log("  AI 分析指數漲跌原因...")
     indices_for_analysis = {}
@@ -201,7 +212,7 @@ def run_ai_analysis(market_data, news_data, hot_stocks):
     calendar_events = generate_economic_calendar_analysis(calendar_text)
     log(f"  ✓ 經濟日曆分析完成: {len(calendar_events)} 事件")
 
-    return news_events, index_analysis, stock_analysis, calendar_events
+    return news_events, index_analysis, stock_analysis, calendar_events, fact_check_report
 
 
 def save_report(content, filename):
@@ -281,7 +292,7 @@ def main():
     hot_stocks = collect_hot_stocks(news_data.get('trending_tickers', []))
 
     # 4. AI 分析
-    news_events, index_analysis, stock_analysis, calendar_events = run_ai_analysis(
+    news_events, index_analysis, stock_analysis, calendar_events, fact_check_report = run_ai_analysis(
         market_data, news_data, hot_stocks
     )
 
@@ -351,6 +362,8 @@ def main():
         'fund_flows': enhanced_data.get('fund_flows', {}),
         'report_date': report_date,
         'generated_at': datetime.now().isoformat(),
+        # 新聞事實查核報告
+        'fact_check_report': fact_check_report,
     }
     raw_path = os.path.join(REPORT_DIR, f"raw_data_{report_date}.json")
     with open(raw_path, 'w', encoding='utf-8') as f:
