@@ -116,10 +116,8 @@ jobs:
           ls -la "${PDF_FILE}"
 
       - name: Send email
-        env:
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
-          python3 -c "
+          python3 << 'EMAILEOF'
           import smtplib, os, sys
           from email.mime.multipart import MIMEMultipart
           from email.mime.text import MIMEText
@@ -132,15 +130,19 @@ jobs:
           JSON_PATH = f'reports/raw_data_{DATE}.json'
           PDF_PATH = f'reports/daily_report_{DATE}.pdf'
 
+          # Read SMTP config from the repo's email_sender module
+          from modules.email_sender import SMTP_CONFIG
+
           # Generate email body
           try:
               from modules.email_sender import generate_email_summary
               content = generate_email_summary(JSON_PATH)
-          except:
+          except Exception as e:
+              print(f'Summary generation failed: {e}')
               content = f'{DATE} 每日宏觀資訊綜合早報，完整報告請見附件 PDF。'
 
           msg = MIMEMultipart()
-          msg['From'] = '何宣逸 <cbe566@gmail.com>'
+          msg['From'] = f"{SMTP_CONFIG['sender_name']} <{SMTP_CONFIG['sender_email']}>"
           msg['To'] = 'cbe566@gmail.com'
           msg['Subject'] = f'每日宏觀資訊綜合早報 | {DATE}'
           msg.attach(MIMEText(content, 'plain', 'utf-8'))
@@ -153,11 +155,13 @@ jobs:
                   att.add_header('Content-Disposition', 'attachment', filename=os.path.basename(PDF_PATH))
                   msg.attach(att)
               print(f'PDF attached: {os.path.getsize(PDF_PATH)/1024:.0f} KB')
+          else:
+              print(f'WARNING: PDF not found at {PDF_PATH}')
 
-          server = smtplib.SMTP('smtp.gmail.com', 587)
+          server = smtplib.SMTP(SMTP_CONFIG['server'], SMTP_CONFIG['port'])
           server.starttls()
-          server.login('cbe566@gmail.com', os.environ['SMTP_PASSWORD'])
-          server.sendmail('cbe566@gmail.com', ['cbe566@gmail.com'], msg.as_string())
+          server.login(SMTP_CONFIG['sender_email'], SMTP_CONFIG['app_password'])
+          server.sendmail(SMTP_CONFIG['sender_email'], ['cbe566@gmail.com'], msg.as_string())
           server.quit()
           print(f'Email sent to cbe566@gmail.com')
-          "
+          EMAILEOF
