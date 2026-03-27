@@ -78,8 +78,10 @@ def gen_executive_summary(md, enh, enh2):
         lines.append(f"商品方面，黃金 {gold_chg:+.2f}%，WTI 原油 {oil_chg:+.2f}%。")
 
     # 情緒
-    if fg is not None:
+    if fg is not None and vix is not None:
         lines.append(f"市場情緒方面，CNN 恐懼與貪婪指數 {fg:.0f}（{fg_rating}），VIX {vix:.1f}，美林時鐘指向{clock}。")
+    elif fg is not None:
+        lines.append(f"市場情緒方面，CNN 恐懼與貪婪指數 {fg:.0f}（{fg_rating}），美林時鐘指向{clock}。")
 
     return '\n\n'.join(lines)
 
