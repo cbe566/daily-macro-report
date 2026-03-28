@@ -72,34 +72,44 @@ jobs:
           fi
           ls -la "${PDF_FILE}"
 
-      - name: Send email
+      - name: Send email (摘要正文 + PDF附件)
         run: |
           python3 -c "
-          import smtplib, os, sys
+          import smtplib, os, sys, json
           from email.mime.multipart import MIMEMultipart
           from email.mime.text import MIMEText
           from email.mime.base import MIMEBase
           from email import encoders
           from datetime import datetime
 
+          sys.path.insert(0, '.')
           DATE = datetime.now().strftime('%Y-%m-%d')
           PDF_PATH = f'reports/daily_report_{DATE}.pdf'
-          HTML_PATH = f'reports/daily_report_{DATE}.html'
+          JSON_PATH = f'reports/raw_data_{DATE}.json'
 
-          html_body = ''
-          if os.path.exists(HTML_PATH):
-              with open(HTML_PATH, 'r', encoding='utf-8') as f:
-                  html_body = f.read()
+          # 用 email_sender 生成精簡摘要（不是完整報告）
+          from modules.email_sender import generate_email_html, generate_email_summary
 
-          msg = MIMEMultipart()
+          html_body = None
+          plain_body = f'{DATE} 報告請見附件'
+          if os.path.exists(JSON_PATH):
+              try:
+                  html_body = generate_email_html(JSON_PATH)
+                  plain_body = generate_email_summary(JSON_PATH)
+                  print('Email 摘要正文已生成')
+              except Exception as e:
+                  print(f'生成摘要失敗: {e}')
+
+          msg = MIMEMultipart('mixed')
           msg['From'] = 'backup901012@gmail.com'
           msg['To'] = 'cbe566@gmail.com'
           msg['Subject'] = f'每日宏觀資訊綜合早報 | {DATE}'
 
+          alt = MIMEMultipart('alternative')
+          alt.attach(MIMEText(plain_body, 'plain', 'utf-8'))
           if html_body:
-              msg.attach(MIMEText(html_body, 'html', 'utf-8'))
-          else:
-              msg.attach(MIMEText(f'{DATE} 報告請見附件', 'plain', 'utf-8'))
+              alt.attach(MIMEText(html_body, 'html', 'utf-8'))
+          msg.attach(alt)
 
           if os.path.exists(PDF_PATH):
               with open(PDF_PATH, 'rb') as f:
