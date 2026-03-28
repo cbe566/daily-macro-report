@@ -117,25 +117,32 @@ def get_sentiment_data():
         results['fear_greed'] = {'error': str(e)}
         log(f"    ✗ Fear & Greed: {e}")
 
-    # 2. VIX
+    # 2. VIX（含重試機制）
     log("  獲取 VIX...")
-    try:
-        vix = yf.Ticker("^VIX")
-        vix_hist = vix.history(period="1mo")
-        if not vix_hist.empty:
-            latest_vix = vix_hist.iloc[-1]
-            prev_vix = vix_hist.iloc[-2] if len(vix_hist) > 1 else None
-            results['vix'] = {
-                'value': float(latest_vix['Close']),
-                'change': float(latest_vix['Close'] - prev_vix['Close']) if prev_vix is not None else 0,
-                'change_pct': float((latest_vix['Close'] - prev_vix['Close']) / prev_vix['Close'] * 100) if prev_vix is not None else 0,
-                'high_1m': float(vix_hist['High'].max()),
-                'low_1m': float(vix_hist['Low'].min()),
-            }
-            log(f"    ✓ VIX: {results['vix']['value']:.2f} ({results['vix']['change_pct']:+.2f}%)")
-    except Exception as e:
-        results['vix'] = {'error': str(e)}
-        log(f"    ✗ VIX: {e}")
+    import time as _time
+    for _attempt in range(3):
+        try:
+            vix = yf.Ticker("^VIX")
+            vix_hist = vix.history(period="1mo")
+            if not vix_hist.empty:
+                latest_vix = vix_hist.iloc[-1]
+                prev_vix = vix_hist.iloc[-2] if len(vix_hist) > 1 else None
+                results['vix'] = {
+                    'value': float(latest_vix['Close']),
+                    'change': float(latest_vix['Close'] - prev_vix['Close']) if prev_vix is not None else 0,
+                    'change_pct': float((latest_vix['Close'] - prev_vix['Close']) / prev_vix['Close'] * 100) if prev_vix is not None else 0,
+                    'high_1m': float(vix_hist['High'].max()),
+                    'low_1m': float(vix_hist['Low'].min()),
+                }
+                log(f"    ✓ VIX: {results['vix']['value']:.2f} ({results['vix']['change_pct']:+.2f}%)")
+                break
+        except Exception as e:
+            if _attempt < 2:
+                log(f"    ⚠ VIX 第{_attempt+1}次失敗: {e}，3秒後重試...")
+                _time.sleep(3)
+            else:
+                results['vix'] = {'error': str(e)}
+                log(f"    ✗ VIX: 3次嘗試均失敗 - {e}")
 
     # 3. US 10Y Treasury Yield
     log("  獲取 US 10Y Yield...")

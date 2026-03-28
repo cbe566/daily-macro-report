@@ -805,10 +805,12 @@ def _gen_sentiment_section(sentiment_data, clock_data, sentiment_analysis=None):
     fg_color = "#e74c3c" if fg_score < 25 else "#e67e22" if fg_score < 45 else "#f1c40f" if fg_score < 55 else "#27ae60"
     fg_rating_zh = "極度恐懼" if fg_score < 25 else "恐懼" if fg_score < 45 else "中性" if fg_score < 55 else "貪婪" if fg_score < 75 else "極度貪婪"
 
-    vix_val = vix.get('value', 0)
-    vix_change = vix.get('change', 0)
-    vix_change_pct = vix.get('change_pct', 0)
-    vix_color = "#e74c3c" if vix_val > 25 else "#e67e22" if vix_val > 20 else "#27ae60"
+    vix_val = vix.get('value') if 'error' not in vix else None
+    vix_change = vix.get('change', 0) if vix_val else 0
+    vix_change_pct = vix.get('change_pct', 0) if vix_val else 0
+    if vix_val is None:
+        vix_val = 0
+    vix_color = "#e74c3c" if vix_val > 25 else "#e67e22" if vix_val > 20 else "#999" if vix_val == 0 else "#27ae60"
 
     us10y_yield = us10y.get('yield', 0)
     us10y_change = us10y.get('change', 0)
@@ -828,8 +830,8 @@ def _gen_sentiment_section(sentiment_data, clock_data, sentiment_analysis=None):
 </div>
 <div class="sentiment-card">
   <div class="label">VIX 恐慌指數</div>
-  <div class="value" style="color:{vix_color};">{vix_val:.2f}</div>
-  <div class="sub {vix_cls}">{vix_sign}{vix_change:.2f} ({vix_sign}{vix_change_pct:.1f}%)</div>
+  <div class="value" style="color:{vix_color};">{"N/A" if vix_val == 0 else f"{vix_val:.2f}"}</div>
+  <div class="sub {vix_cls}">{"數據暫缺" if vix_val == 0 else f"{vix_sign}{vix_change:.2f} ({vix_sign}{vix_change_pct:.1f}%)"}</div>
 </div>
 <div class="sentiment-card">
   <div class="label">美10Y殖利率</div>
