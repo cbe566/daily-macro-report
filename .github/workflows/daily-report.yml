@@ -2,9 +2,8 @@ name: 每日宏觀資訊報告
 
 on:
   schedule:
-    # 台北時間 07:00 = UTC 23:00（前一天），週一到週五
-    # 先跑數據收集，07:30 Claude agent 會接手 AI 分析
-    - cron: '0 23 * * 0-4'
+    # 台北時間 07:30 = UTC 23:30（前一天），週一到週五
+    - cron: '30 23 * * 0-4'
   workflow_dispatch:  # 手動觸發
 
 env:
@@ -123,11 +122,78 @@ jobs:
           print('Alternative data collected')
           "
 
-      - name: Commit collected data to repo
+      - name: Generate report
+        run: python3 scripts/generate_full_report.py
+
+      - name: Generate PDF
+        run: |
+          DATE=$(TZ='Asia/Taipei' date +%Y-%m-%d)
+          HTML_FILE="reports/daily_report_${DATE}.html"
+          PDF_FILE="reports/daily_report_${DATE}.pdf"
+          if command -v chromium-browser &>/dev/null; then
+            chromium-browser --headless --no-sandbox --disable-gpu \
+              --print-to-pdf="${PDF_FILE}" --print-to-pdf-no-header \
+              "file://$(pwd)/${HTML_FILE}" || true
+          fi
+          if [ ! -f "${PDF_FILE}" ] || [ $(stat -c%s "${PDF_FILE}" 2>/dev/null || echo 0) -lt 1000 ]; then
+            python3 -c "
+          from weasyprint import HTML
+          HTML('${HTML_FILE}').write_pdf('${PDF_FILE}')
+          print('PDF generated with WeasyPrint')
+          "
+          fi
+          ls -la "${PDF_FILE}"
+
+      - name: Send email
+        run: |
+          python3 -c "
+          import smtplib, os, sys
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.text import MIMEText
+          from email.mime.base import MIMEBase
+          from email import encoders
+          from datetime import datetime
+
+          sys.path.insert(0, '.')
+          DATE = datetime.now().strftime('%Y-%m-%d')
+          PDF_PATH = f'reports/daily_report_{DATE}.pdf'
+          HTML_PATH = f'reports/daily_report_{DATE}.html'
+
+          html_body = ''
+          if os.path.exists(HTML_PATH):
+              with open(HTML_PATH, 'r', encoding='utf-8') as f:
+                  html_body = f.read()
+
+          msg = MIMEMultipart()
+          msg['From'] = 'backup901012@gmail.com'
+          msg['To'] = 'cbe566@gmail.com'
+          msg['Subject'] = f'每日宏觀資訊綜合早報 | {DATE}'
+
+          if html_body:
+              msg.attach(MIMEText(html_body, 'html', 'utf-8'))
+          else:
+              msg.attach(MIMEText(f'{DATE} 報告請見附件', 'plain', 'utf-8'))
+
+          if os.path.exists(PDF_PATH):
+              with open(PDF_PATH, 'rb') as f:
+                  att = MIMEBase('application', 'pdf')
+                  att.set_payload(f.read())
+                  encoders.encode_base64(att)
+                  att.add_header('Content-Disposition', 'attachment', filename=f'daily_report_{DATE}.pdf')
+                  msg.attach(att)
+
+          server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+          server.login('backup901012@gmail.com', 'mlrw darm xibx jxrk')
+          server.sendmail('backup901012@gmail.com', ['cbe566@gmail.com'], msg.as_string())
+          server.quit()
+          print(f'Email sent to cbe566@gmail.com')
+          "
+
+      - name: Commit data to repo
         run: |
           DATE=$(TZ='Asia/Taipei' date +%Y-%m-%d)
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
-          git add reports/market_data_today.json reports/news_today.json reports/hot_stocks_today.json reports/enhanced_today.json reports/enhanced_v2_today.json reports/fred_today.json reports/alternative_today.json
-          git commit -m "data: ${DATE} 市場數據收集完成（等待 Claude AI 分析）" || echo "No changes to commit"
-          git push origin master
+          git add reports/ -f
+          git commit -m "data: ${DATE} 報告已生成並發送" || echo "No changes to commit"
+          git push origin master || echo "Push failed, non-critical"
