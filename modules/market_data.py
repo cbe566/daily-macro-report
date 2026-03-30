@@ -132,6 +132,16 @@ def fetch_quote(symbol, name=None):
         curr_close = float(curr['Close'])
         prev_close = float(prev['Close'])
 
+        import math
+        if math.isnan(curr_close) or math.isnan(prev_close):
+            valid = hist.dropna(subset=['Close'])
+            if len(valid) < 2:
+                return None
+            curr = valid.iloc[-1]
+            prev = valid.iloc[-2]
+            curr_close = float(curr['Close'])
+            prev_close = float(prev['Close'])
+
         if curr_close <= 0 or prev_close <= 0:
             return None
 
