@@ -9,7 +9,9 @@ on:
 
 env:
   TZ: Asia/Taipei
+  GMAIL_USER: ${{ secrets.GMAIL_USER }}
   GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+  EMAIL_TO: ${{ secrets.EMAIL_TO }}
 
 jobs:
   generate-and-send:
@@ -101,9 +103,12 @@ jobs:
               except Exception as e:
                   print(f'生成摘要失敗: {e}')
 
+          GMAIL_USER = os.environ.get('GMAIL_USER', 'backup901012@gmail.com')
+          EMAIL_TO = os.environ.get('EMAIL_TO', 'cbe566@gmail.com')
+
           msg = MIMEMultipart('mixed')
-          msg['From'] = 'backup901012@gmail.com'
-          msg['To'] = 'cbe566@gmail.com'
+          msg['From'] = GMAIL_USER
+          msg['To'] = EMAIL_TO
           msg['Subject'] = f'每日宏觀資訊綜合早報 | {DATE}'
 
           alt = MIMEMultipart('alternative')
@@ -121,8 +126,8 @@ jobs:
                   msg.attach(att)
 
           server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-          server.login('backup901012@gmail.com', os.environ['GMAIL_APP_PASSWORD'])
-          server.sendmail('backup901012@gmail.com', ['cbe566@gmail.com'], msg.as_string())
+          server.login(GMAIL_USER, os.environ['GMAIL_APP_PASSWORD'])
+          server.sendmail(GMAIL_USER, [EMAIL_TO], msg.as_string())
           server.quit()
-          print(f'Email sent to cbe566@gmail.com at {datetime.now().strftime(\"%H:%M:%S\")}')
+          print(f'Email sent to {EMAIL_TO} at {datetime.now().strftime(\"%H:%M:%S\")}')
           "
