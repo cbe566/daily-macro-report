@@ -9,6 +9,7 @@ on:
 
 env:
   TZ: Asia/Taipei
+  GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
 
 jobs:
   generate-and-send:
@@ -120,7 +121,7 @@ jobs:
                   msg.attach(att)
 
           server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-          server.login('backup901012@gmail.com', 'mlrw darm xibx jxrk')
+          server.login('backup901012@gmail.com', os.environ['GMAIL_APP_PASSWORD'])
           server.sendmail('backup901012@gmail.com', ['cbe566@gmail.com'], msg.as_string())
           server.quit()
           print(f'Email sent to cbe566@gmail.com at {datetime.now().strftime(\"%H:%M:%S\")}')
